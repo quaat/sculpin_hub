@@ -8,6 +8,7 @@ export default tseslint.config(
       "**/.next/**",
       "**/coverage/**",
       "**/node_modules/**",
+      "**/next-env.d.ts",
     ],
   },
   eslint.configs.recommended,

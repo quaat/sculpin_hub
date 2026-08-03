@@ -100,7 +100,9 @@ describe("proxy foundation", () => {
     const response = await server.inject("/v1/test-error");
     expect(response.statusCode).toBe(500);
     expect(response.body).not.toContain("canary internal stack");
-    expect(response.json().error.code).toBe("internal_error");
+    expect(response.json<{ error: { code: string } }>().error.code).toBe(
+      "internal_error",
+    );
     await server.close();
   });
 });

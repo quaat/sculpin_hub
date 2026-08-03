@@ -36,8 +36,8 @@ export interface JobRunner {
 export function createIdleJobRunner(): JobRunner {
   return {
     handlerCount: 0,
-    async runOnce() {
-      return 0;
+    runOnce() {
+      return Promise.resolve(0);
     },
   };
 }

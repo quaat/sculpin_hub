@@ -5,7 +5,7 @@ function capture() {
   let output = "";
   return {
     sink: new Writable({
-      write(chunk, _encoding, callback) {
+      write(chunk: Buffer, _encoding, callback) {
         output += chunk.toString();
         callback();
       },

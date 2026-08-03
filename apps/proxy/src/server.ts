@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
 import {
   internalProxyError,
   requestIdSchema,
@@ -21,7 +21,9 @@ export function createProxyServer(
   config: ProxyConfig,
   dependencies: ServerDependencies,
 ): FastifyInstance {
-  const logger = createLogger({
+  // Widen to FastifyBaseLogger so the instance keeps the default
+  // FastifyInstance typing instead of binding to pino's Logger type.
+  const logger: FastifyBaseLogger = createLogger({
     service: "proxy",
     environment: config.environment,
     level: config.logLevel,
@@ -59,7 +61,7 @@ export function createProxyServer(
     );
     done();
   });
-  server.get("/health/live", async () => ({ status: "ok", service: "proxy" }));
+  server.get("/health/live", () => ({ status: "ok", service: "proxy" }));
   server.get("/health/ready", async (_request, reply) => {
     try {
       if (await database.ready())

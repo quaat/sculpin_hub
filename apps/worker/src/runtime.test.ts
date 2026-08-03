@@ -5,18 +5,16 @@ import { createIdleJobRunner } from "@sculpin/jobs";
 import { WorkerRuntime } from "./runtime.js";
 describe("worker runtime", () => {
   it("initializes the database, stays idle without handlers, and shuts down once", async () => {
-    const db: Database = {
-      pool: {} as never,
-      ready: vi.fn().mockResolvedValue(true),
-      close: vi.fn().mockResolvedValue(undefined),
-    };
+    const ready = vi.fn().mockResolvedValue(true);
+    const close = vi.fn().mockResolvedValue(undefined);
+    const db: Database = { pool: {} as never, ready, close };
     const logger = { info: vi.fn() } as unknown as Logger;
     const runtime = new WorkerRuntime(db, createIdleJobRunner(), logger);
     await runtime.start();
     await runtime.stop("SIGTERM");
     await runtime.stop("SIGINT");
-    expect(db.ready).toHaveBeenCalledOnce();
-    expect(db.close).toHaveBeenCalledOnce();
+    expect(ready).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
     expect(logger.info).toHaveBeenCalledWith(
       "no production job handlers registered; worker is idle",
     );

@@ -31,9 +31,14 @@ describe("runtime configuration", () => {
     ).toThrow("DATABASE_URL");
   });
   it("does not echo secret values in errors", () => {
-    expect(() =>
-      parseWebConfig({ DATABASE_URL: "canary-secret" }),
-    ).toThrowError(expect.not.stringContaining("canary-secret"));
+    let message = "";
+    try {
+      parseWebConfig({ DATABASE_URL: "canary-secret" });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).not.toBe("");
+    expect(message).not.toContain("canary-secret");
   });
   it("requires deliberate production binding", () => {
     expect(() =>
