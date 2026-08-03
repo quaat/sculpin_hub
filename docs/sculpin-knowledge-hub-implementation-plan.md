@@ -4,7 +4,7 @@
 
 ## 1. Executive summary
 
-This repository is a planning-only skeleton: `README.md` is empty and `plan.md` contains the supplied brief; there is no application, API contract, mockup asset, dependency manifest, schema, test, container, infrastructure, or CI workflow. Consequently, no Sculpin endpoint is confirmed and the MVP **must not advertise any `/v1/*` operation until a signed upstream contract and contract fixture confirm it**.
+At the time of the original assessment this repository was a planning-only skeleton: `README.md` was empty and `plan.md` contained the supplied brief. The initial foundation slice now adds the workspace, application shells, shared packages, tests, containers, CI, ADRs, and UI specification described in section 6.1. There is still no certified Sculpin or accounting contract and no production domain schema. Consequently, no Sculpin endpoint is confirmed and the MVP **must not advertise any `/v1/*` operation until a signed upstream contract and contract fixture confirm it**.
 
 Build a TypeScript monorepo with three independently deployable workloads but only two application codebases initially:
 
@@ -24,8 +24,11 @@ Inspection used `git ls-files`, `find . -maxdepth 2 -type f`, targeted `rg`, and
 
 | Path | Confirmed content | Disposition |
 |---|---|---|
-| `README.md` | Empty | Extend with workspace bootstrap/runbook in phase 1. |
+| `README.md` | Developer quick start and foundation scope (added by the initial slice) | Keep current as workloads and prerequisites evolve. |
 | `plan.md` | The product/planning prompt, not an implementation | Retain as source brief; reusable as requirements input only. |
+| `apps/`, `packages/`, `compose.yaml`, root manifests | Foundation implementation added after the original plan | Reuse and extend through focused phases; it intentionally contains no business domain. |
+| `.github/workflows/ci.yml`, application Dockerfiles | Foundation validation and container delivery added after the original plan | Extend with real integration/security/deployment gates. |
+| `docs/adr/`, `docs/ui-design-spec.md` | Foundation decisions and explicit visual direction added after the original plan | Resolve open ADRs before their feature. |
 | `.git/` | One initial commit on branch `work`; no remote configured | No code history or deployment conventions to preserve. |
 
 No `AGENTS.md` exists in or above the repository. No attached mockup is present in the filesystem, so visual fidelity cannot be assessed beyond the stated clean SaaS direction.
@@ -34,18 +37,18 @@ No `AGENTS.md` exists in or above the repository. No attached mockup is present 
 
 | Area | Existing fact | Reuse / extend / replace / missing |
 |---|---|---|
-| Frontend/backend | None | Missing; establish the proposed workspace. |
-| Authentication | None | Missing; integrate an established OAuth/OIDC library. |
-| Database/migrations | None | Missing; PostgreSQL + Prisma migrations recommended. |
-| API conventions | None | Missing; establish REST JSON and OpenAI error conventions. |
-| Configuration | None | Missing; typed environment validation plus secret references. |
+| Frontend/backend | Next.js web, Fastify proxy, and idle worker foundations | Reuse; business capabilities remain missing. |
+| Authentication | None | Missing by design; decide through ADR-004. |
+| Database/migrations | PostgreSQL `pg` lifecycle/readiness seam; no business tables | Select Prisma with the first meaningful domain migration. |
+| API conventions | Shared health and separate control/data-plane error contracts | Extend without conflating planes. |
+| Configuration | Typed Zod validation for web/proxy/worker | Reuse; add feature settings with each feature. |
 | Sculpin integration | None; no upstream docs or fixtures | Missing and blocked at route level pending contract. |
 | Accounting/billing | None | Missing; ports/adapters, mock accounting, Stripe. |
-| Tests | None | Missing; Vitest, Testcontainers, Playwright, contract fixtures. |
-| Containers/deployment | None | Missing; OCI images and Azure IaC. |
-| CI/CD | None | Missing; GitHub Actions is a recommendation, not a fact. |
+| Tests | Deterministic Vitest foundation tests | Extend with Testcontainers, Playwright, and contract fixtures when relevant. |
+| Containers/deployment | Non-root Dockerfiles and local Compose; no cloud IaC | Reuse images; Azure IaC remains undecided. |
+| CI/CD | GitHub Actions format/lint/type/test/build baseline | Extend with real deployment gates. |
 
-Nothing executable can be reused or extended. Nothing warrants replacement. `plan.md` remains useful as requirements provenance.
+That statement reflected the repository before foundation implementation. The new executable foundation is reusable and should be extended rather than replaced without an ADR. No identity, subscription, token, accounting, Sculpin, or administrative capability exists yet; `plan.md` remains requirements provenance.
 
 ### 2.3 Proposed repository layout
 
@@ -53,7 +56,8 @@ Nothing executable can be reused or extended. Nothing warrants replacement. `pla
 apps/web/                 # Next.js pages, BFF/control API, webhooks
 apps/proxy/               # Fastify OpenAI-compatible data plane
 apps/worker/              # webhook, outbox, reconciliation jobs
-packages/db/              # Prisma schema, migrations, repositories
+packages/db/              # database lifecycle now; Prisma/migrations with first domain schema
+packages/jobs/            # provider-neutral job/outbox contracts and runner
 packages/domain/          # state machines, entitlement policy, types
 packages/auth/            # Auth.js configuration and authorization helpers
 packages/accounting/      # port, HTTP adapter, deterministic fake
@@ -74,7 +78,23 @@ The brief confirms social sign-in with Google and LinkedIn; public products; fre
 
 The repository confirms **no** OpenAI-compatible endpoint, upstream authentication scheme, accounting operation, cloud target, payment currency, visual asset, or organizational engineering standard. Examples in `plan.md` are candidates, not supported routes.
 
-## 4. Assumptions and open questions
+## 4. Assumptions, decision gates, and open questions
+
+### Decisions that block all implementation
+
+None are currently known. Secure foundations and typed seams can proceed without production providers. A newly discovered legal restriction or mandatory organizational platform would be escalated here rather than silently worked around.
+
+### Decisions that block only a production feature
+
+| Decision | Production feature blocked | Safe work that may proceed |
+|---|---|---|
+| Certified Sculpin contract | Registering or forwarding any production `/v1/*` route | Empty registry, normalized unsupported responses, proxy controls, synthetic in-process test routes. |
+| External accounting contract | Quota-controlled production traffic | Accounting seams and deterministic tests. |
+| Approved private network path | Hosted Sculpin connectivity | Portable containers and local applications; no public upstream exposure. |
+| Google/LinkedIn registrations and verified library behavior | Corresponding login provider | Public UI and identity research; login remains disabled. |
+| Stripe business/tax/currency decisions | Paid checkout/subscriptions | Domain design and illustrative UI; no fake checkout. |
+
+### Decisions with safe temporary development defaults
 
 | Question | Safe implementation default | Decision owner / gate |
 |---|---|---|
@@ -89,6 +109,8 @@ The repository confirms **no** OpenAI-compatible endpoint, upstream authenticati
 | Prompt retention? | Never log/store payloads; only aggregate usage and diagnostics. | Privacy/legal. |
 | LinkedIn/Google provider approval? | Start application registration early; feature remains disabled until approved. | Product/security. |
 | UI mockup? | Responsive accessible design tokens; request source file before visual acceptance. | Design. |
+
+The **initial implementation slice is explicitly unblocked** while the production Sculpin route registry remains empty, external accounting remains unconfigured, Google and LinkedIn login remain disabled, Stripe Checkout remains disabled, and production infrastructure remains undecided. These are deliberate disabled states, not mock or in-memory production fallbacks.
 
 **Documentation verification note.** Before implementing identity/billing, engineers must re-verify provider behavior against the current official [Google OIDC documentation](https://developers.google.com/identity/openid-connect/openid-connect), [LinkedIn authorization-code documentation](https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow), [LinkedIn OIDC sign-in documentation](https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin-v2), and [Stripe webhook documentation](https://docs.stripe.com/webhooks). Network access was unavailable while writing this plan, so this plan deliberately does not freeze mutable provider details. Record versions/date and findings in ADRs and contract tests.
 
@@ -107,6 +129,12 @@ Organizations are real tenant boundaries in MVP, but subscriptions are created f
 ## 6. Out-of-scope items
 
 Defer enterprise contracts, invitations and complex team administration, SCIM/SAML, custom RBAC, multi-currency/payment providers, advanced invoices/revenue sharing/resellers, analytics warehouse, advanced IP allowlists, user-defined routing, BYO Sculpin credentials, marketplace settlement, custom quota formulas, mobile apps, and prompt history. Do **not** defer tenant checks, secure token handling, accounting concurrency, migrations, tests, backups, observability, or runbooks.
+
+### 6.1 Initial implementation slice
+
+This first bounded slice implements the pnpm/Turborepo strict-TypeScript toolchain; Next.js web, Fastify proxy, and deliberately idle worker foundations; shared validated configuration, structured logging/redaction, API health/error contracts, PostgreSQL client lifecycle, and provider-neutral job types; local PostgreSQL and Redis; truthful liveness/readiness, an empty production registry and synthetic test-only route composition; accessible public presentation pages and explicit unauthenticated dashboard state; non-root containers, CI, deterministic tests, ADRs, UI specification, and developer documentation.
+
+It explicitly excludes real Google or LinkedIn authentication, real Stripe integration, paid subscriptions, full product/plan persistence, API-token issuance, external accounting calls, production Sculpin routing, production Azure infrastructure, organization and administration workflows, user persistence, OAuth callbacks, usage reservations, and all production business jobs. Exclusions remain visibly disabled rather than simulated.
 
 ## 7. Recommended architecture
 
@@ -137,7 +165,7 @@ flowchart LR
 
 * **Web/control plane:** interactive session, tenant-aware CRUD, public reads, admin, checkout/portal initiation, webhook ingress, audit. It never accepts API bearer tokens as dashboard sessions.
 * **Proxy/data plane:** narrow route registry, token auth, entitlement snapshot, controls, accounting, Sculpin transport, normalized responses. No catalog mutations or billing logic.
-* **Worker:** durable webhook state application, outbox, reservation/billing drift reconciliation, usage rollups, retention. HTTP ingress acknowledges valid stored webhooks quickly.
+* **Worker:** eventually owns durable processing. In the initial slice it has no production handlers and does not poll. `packages/jobs` defines provider-neutral identity, payload, attempt, claim, completion, retryable-failure, and terminal-failure contracts. Prefer a PostgreSQL transactional outbox with atomic `FOR UPDATE SKIP LOCKED` claims, owner leases, bounded batches, and idempotent handlers unless later evidence justifies another provider.
 * **PostgreSQL:** authoritative identity, tenant, product/plan definitions, local subscription projection, tokens, audit/idempotency records. Accounting API is authoritative for usage totals/reservations; Stripe is authoritative for paid billing state; webhook-derived local projections reconcile against both.
 * **Redis:** non-authoritative rate/concurrency primitives and short-lived caches. Never the only record of money, quota consumption, token revocation, or jobs.
 
@@ -181,7 +209,7 @@ Security headers: strict CSP with nonces, HSTS, `nosniff`, restrictive `Referrer
 
 ## 10. Authentication and identity design
 
-Use current Auth.js with its database adapter only after phase-1 compatibility verification. Google is OIDC. LinkedIn's current approved OIDC product should be preferred; if the tenant only supports OAuth userinfo, explicitly document scopes/claims and do not manufacture OIDC guarantees.
+Authentication is outside the initial slice. Resolve ADR-004 first: verify current Auth.js database-session, adapter, cookie, rotation, and revocation behavior; determine whether its supported session model meets the threat model; and evaluate a custom adapter only if evidence identifies a gap. Do not implement a custom authentication or session protocol merely to satisfy the earlier unverified hashed-session assumption. Prefer an established, supportable library configuration. Google is OIDC. LinkedIn's current approved OIDC product should be preferred; if the tenant only supports OAuth userinfo, explicitly document scopes/claims and do not manufacture OIDC guarantees.
 
 ```mermaid
 sequenceDiagram
@@ -203,7 +231,7 @@ sequenceDiagram
 * Exact HTTPS callback URIs are registered per environment; reject dynamic callback hosts and non-allowlisted return paths. Authorization Code flow is mandatory, with PKCE when supported/recommended. Library validates `state`, nonce, issuer, audience, code exchange and token signature.
 * Unique identity is `(provider, provider_subject)`. Normalize email for display/search but do not use it as identity. Never auto-link an existing account merely because emails match, even if verified: require a logged-in, recently reauthenticated user to initiate linking and prove both providers. Duplicate verified email yields a generic account-linking prompt; unverified email cannot link.
 * Persist provider subject, minimal profile, email and verification status. Do not retain provider access/refresh tokens unless a documented downstream need exists; if needed, envelope-encrypt with Key Vault-managed KEK, restrict columns, rotate, and delete at unlink.
-* Store opaque random session identifiers hashed in PostgreSQL; 12-hour idle and 7-day absolute expiry (decision configurable), rotation on sign-in/privilege change, server-side revocation. Cookies: `HttpOnly`, `Secure`, `SameSite=Lax`, path `/`, no broad domain. Apply origin/CSRF-token checks to mutations. Logout revokes server session and clears cookie; provider-wide logout is not implied.
+* Session representation is an ADR outcome, not a frozen custom requirement. Require documented fixation resistance, rotation, bounded idle/absolute expiry, and revocation appropriate to the supported model. Cookies: `HttpOnly`, `Secure`, `SameSite=Lax`, path `/`, no broad domain. Apply origin/CSRF-token checks to mutations. Logout revokes server session and clears cookie; provider-wide logout is not implied.
 * Deactivation revokes sessions and API tokens, suspends owned personal-tenant subscriptions, and blocks authentication. Platform roles are separate from organization roles; admin actions enforce server authorization and recent auth. Require MFA through the identity/provider policy for production administrators if the chosen identity solution exposes assurance; otherwise adopt a managed admin IdP before launch.
 
 ## 11. Product, plan, and subscription design
@@ -327,7 +355,7 @@ Provide a deterministic PostgreSQL-backed fake/reference service with injected c
 
 ## 14. OpenAI-compatible proxy design
 
-The public route registry begins empty. Candidate routes (`GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/responses`) are enabled individually only when Sculpin contract evidence identifies path, schema, streaming framing, errors, model routing, and usage. Publish an explicit compatibility matrix; unsupported paths return normalized 404 without implying official OpenAI parity.
+The public route registry begins empty. Tests may directly compose synthetic in-process routes and a deterministic Sculpin stub; no environment flag or normal development configuration may enable them. Production and normal development return normalized unsupported-route responses for unregistered `/v1/*` operations, and no endpoint claims full OpenAI compatibility. Candidate routes (`GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/responses`) are enabled individually only when Sculpin contract evidence identifies path, schema, streaming framing, errors, model routing, and usage. Publish an explicit compatibility matrix; unsupported paths return normalized 404 without implying official OpenAI parity.
 
 Request pipeline: edge cheap IP/header limits → correlation ID → strict method/path/content-type/body schema and size → parse bearer → indexed token lookup/HMAC verification → status/tenant/subscription/route entitlement → Redis rate and concurrency lease → authoritative reservation → fixed Sculpin adapter → response stream → commit/release/outbox → lease release. Error responses never reveal which auth predicate failed.
 
@@ -373,7 +401,7 @@ sequenceDiagram
   end
 ```
 
-Limits are endpoint-configured: e.g. initial proposals of 1 MiB request JSON, 16 KiB headers, 8 KiB URL, upstream connect 5 s, first byte 30 s, nonstream total 120 s, stream idle 60 s and absolute 30 min—validate with Sculpin/product owners. Response/body limits and bounded queues prevent memory amplification. Stream directly with backpressure; cancel using `AbortSignal` on disconnect; never retry after response bytes.
+Limits are endpoint-configured: e.g. initial proposals of 1 MiB request JSON, 16 KiB headers, 8 KiB URL, upstream connect 5 s, first byte 30 s, nonstream total 120 s, stream idle 60 s and absolute 30 min. **These payload, timeout, and stream values are provisional design targets requiring benchmarking, infrastructure cost review, and Sculpin network testing.** Response/body limits and bounded queues prevent memory amplification. Stream directly with backpressure; cancel using `AbortSignal` on disconnect; never retry after response bytes.
 
 Forward only `content-type`, `accept`, a sanitized client request ID when valid, and contract-approved OpenAI headers/query keys. Generate authoritative internal correlation IDs. Strip `Authorization`, cookies, `Host`, forwarding headers, user agent unless needed, and RFC hop-by-hop headers (`Connection` plus its nominated headers, `Keep-Alive`, `Proxy-*`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`). The adapter supplies upstream auth. No caller-provided URL/host/scheme/agent ID; routing is a database ID resolved to a validated configuration selected from allowed environment base URLs.
 
@@ -575,7 +603,7 @@ Emit JSON logs with timestamp, service/version/environment, request/trace IDs, t
 
 Alert on SLO burn, brute-force spikes, admin/break-glass changes, webhook forgery spikes, reservation leak/drift, backups, certificate/secret expiry, and anomalous egress. Public liveness reveals no dependency; readiness checks DB and workload-critical dependencies with short cached probes; protected diagnostics show dependency categories.
 
-| SLO (rolling 30 days, initial) | Target / measurement |
+| Provisional SLO design target (rolling 30 days) | Target / measurement |
 |---|---|
 | Control-plane availability | 99.9% of eligible non-provider requests; exclude scheduled published maintenance. |
 | Proxy availability | 99.95% of authenticated eligible requests, separately report upstream/accounting dependency failures. |
@@ -583,15 +611,15 @@ Alert on SLO burn, brute-force spikes, admin/break-glass changes, webhook forger
 | Token revocation propagation | 99.9% denied within 30 s, maximum 60 s; synthetic multi-instance probe. |
 | Accounting accuracy | ≥99.99% operations reconciled within 15 min; zero known over-quota forwards; monthly financial drift zero unresolved. |
 
-Managed PostgreSQL uses zone redundancy where available, automated backups/PITR (35-day initial target), daily encrypted logical export for critical metadata if required, quarterly restore tests, documented RPO ≤5 min/RTO ≤4 h (business approval). Redis is rebuildable and not restored as truth. Queue is durable with DLQ. Cross-region DR is a later infrastructure capability but runbooks and backup region are decided prelaunch.
+The SLOs above are provisional and require benchmarking plus infrastructure capacity/cost validation. Managed PostgreSQL uses zone redundancy where available, automated backups/PITR (35-day initial target), daily encrypted logical export for critical metadata if required, quarterly restore tests, and provisional RPO ≤5 min/RTO ≤4 h. **Backup duration, RPO, RTO, and retention require restore evidence, business-impact/cost review, and legal/privacy approval.** Redis is rebuildable and not restored as truth. Queue is durable with DLQ. Cross-region DR is a later infrastructure capability but runbooks and backup region are decided prelaunch.
 
 Migrations are expand/migrate/contract, backward-compatible for at least one release, run as a singleton pre-deployment job with separate credentials, lock timeout and backup/rollback plan. Roll forward by default; images are immutable and previous version retained for traffic rollback. Feature flags dark-launch routes/provider flows. Never rollback schema destructively.
 
-Rotate OAuth, Stripe webhook, upstream, HMAC and DB secrets using overlapping versions/runbooks; test without downtime. Suggested retention pending legal: operational logs 30 days, traces 7, metrics 13 months aggregated, audit/billing/usage 7 years only if finance requires, token tombstones 90 days, webhook bodies minimized and 30–90 days. GDPR workflows authenticate requests, export portable profile/subscription/usage/audit data, revoke access, cancel provider state, delete/pseudonymize PII across primary/backups on expiry, notify subprocessors, and retain only documented legal obligations.
+Rotate OAuth, Stripe webhook, upstream, HMAC and DB secrets using overlapping versions/runbooks; test without downtime. Provisional retention targets pending legal, privacy, operational, and cost review: operational logs 30 days, traces 7, metrics 13 months aggregated, audit/billing/usage 7 years only if finance requires, token tombstones 90 days, webhook bodies minimized and 30–90 days. GDPR workflows authenticate requests, export portable profile/subscription/usage/audit data, revoke access, cancel provider state, delete/pseudonymize PII across primary/backups on expiry, notify subprocessors, and retain only documented legal obligations.
 
 ## 23. Deployment architecture
 
-Azure-oriented production: Azure Front Door Premium WAF/TLS routes web and `/v1` to separate Azure Container Apps (or AKS only if organizational capability requires it); Container Apps run web, proxy and worker revisions with minimum replicas for proxy/web and autoscaling on HTTP concurrency/queue depth. Use Azure Database for PostgreSQL Flexible Server private access, Azure Managed Redis, Service Bus for durable jobs, Key Vault via managed identities, Container Registry, Application Insights/Azure Monitor/OpenTelemetry, and private DNS/network integration. Deploy dev/staging/prod into separate subscriptions or at minimum resource groups, databases, vaults, identities and provider accounts.
+Azure-oriented production: Azure Front Door Premium WAF/TLS routes web and `/v1` to separate Azure Container Apps (or AKS only if organizational capability requires it); Container Apps run web, proxy and worker revisions with minimum replicas for proxy/web and autoscaling on HTTP concurrency/queue depth. Use Azure Database for PostgreSQL Flexible Server private access, Azure Managed Redis, and Key Vault via managed identities, Container Registry, Application Insights/Azure Monitor/OpenTelemetry, and private DNS/network integration. Deploy dev/staging/prod into separate subscriptions or at minimum resource groups, databases, vaults, identities and provider accounts. Azure Service Bus is an infrastructure ADR option, not a local or application requirement: begin with a PostgreSQL transactional outbox and consider relaying to Service Bus only when topology, cost, and ownership justify it. No Service Bus SDK or Azure infrastructure is part of the initial slice.
 
 WAF/IP limits precede workloads; application token/subscription controls remain mandatory. Egress allowlists restrict IdPs, Stripe, accounting and Sculpin. Database roles separate migration, web, proxy-read/token-use, and worker privileges. IaC is Bicep if Azure-exclusive team skill is confirmed, otherwise Terraform for portability; decide in ADR. CI uses federated OIDC, never long-lived cloud credentials.
 
