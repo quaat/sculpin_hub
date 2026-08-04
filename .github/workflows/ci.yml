@@ -44,6 +44,8 @@ jobs:
       - run: node scripts/check-ci-database-config.mjs
       - run: docker compose config --quiet
       - run: docker compose up -d --wait postgres redis
+      - run: pnpm db:migrate:deploy
+      - run: pnpm db:migrate:deploy
       - run: pnpm test:integration
       - run: docker build -f apps/web/Dockerfile -t sculpin-hub-web .
       - run: docker build -f apps/proxy/Dockerfile -t sculpin-hub-proxy .

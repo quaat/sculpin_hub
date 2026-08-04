@@ -131,6 +131,12 @@ importers:
 
   packages/db:
     dependencies:
+      '@sculpin/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@sculpin/jobs':
+        specifier: workspace:*
+        version: link:../jobs
       pg:
         specifier: 8.16.3
         version: 8.16.3
@@ -138,6 +144,8 @@ importers:
       '@types/pg':
         specifier: 8.15.5
         version: 8.15.5
+
+  packages/domain: {}
 
   packages/jobs: {}
 

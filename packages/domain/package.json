@@ -1,5 +1,5 @@
 {
-  "name": "@sculpin/db",
+  "name": "@sculpin/domain",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,13 +10,5 @@
     "lint": "eslint src",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
-  },
-  "dependencies": {
-    "@sculpin/domain": "workspace:*",
-    "@sculpin/jobs": "workspace:*",
-    "pg": "8.16.3"
-  },
-  "devDependencies": {
-    "@types/pg": "8.15.5"
   }
 }

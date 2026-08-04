@@ -1,4 +1,9 @@
 import { Pool, type PoolConfig, type QueryConfig } from "pg";
+export {
+  PostgresMembershipRepository,
+  PostgresPersonalTenantTransaction,
+} from "./tenant.js";
+export { PostgresOutboxJobStore } from "./outbox.js";
 export interface Database {
   readonly pool: Pool;
   ready(): Promise<boolean>;
