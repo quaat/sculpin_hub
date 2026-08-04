@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
+import type { Logger } from "pino";
 import { requestIdSchema, unsupportedOperation } from "@sculpin/api-contracts";
 import type { ProxyConfig } from "@sculpin/config";
 import { createDatabase, type Database } from "@sculpin/db";
@@ -15,16 +16,27 @@ export interface ServerDependencies {
   database?: Database;
   databaseFactory?: () => Database;
   registry: RouteRegistry;
+  logger?: Logger;
+}
+export function trustedRequestId(
+  header: string | readonly string[] | undefined,
+  generate: () => string = randomUUID,
+): string {
+  return typeof header === "string" && requestIdSchema.safeParse(header).success
+    ? header
+    : generate();
 }
 export function createProxyServer(
   config: ProxyConfig,
   dependencies: ServerDependencies,
 ): FastifyInstance {
-  const logger = createLogger({
-    service: "proxy",
-    environment: config.environment,
-    level: config.logLevel,
-  });
+  const logger =
+    dependencies.logger ??
+    createLogger({
+      service: "proxy",
+      environment: config.environment,
+      level: config.logLevel,
+    });
   const ownsDatabase = dependencies.database === undefined;
   const database =
     dependencies.database ??
@@ -36,14 +48,7 @@ export function createProxyServer(
   const server = Fastify({
     loggerInstance: logger,
     bodyLimit: config.bodyLimitBytes,
-    requestIdHeader: "x-request-id",
-    genReqId: (request) => {
-      const candidate = request.headers["x-request-id"];
-      return typeof candidate === "string" &&
-        requestIdSchema.safeParse(candidate).success
-        ? candidate
-        : randomUUID();
-    },
+    genReqId: (request) => trustedRequestId(request.headers["x-request-id"]),
     disableRequestLogging: true,
   });
   server.addHook("onRequest", (request, _reply, done) => {

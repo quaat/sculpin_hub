@@ -29,6 +29,7 @@ jobs:
     needs: validate
     env:
       POSTGRES_PASSWORD: ci-foundation-password
+      DATABASE_URL: postgresql://sculpin:ci-foundation-password@127.0.0.1:5432/sculpin_hub
       SMOKE_NODE_ENV: production
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -40,6 +41,7 @@ jobs:
         with: { node-version-file: .nvmrc, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: cp .env.example .env
+      - run: node scripts/check-ci-database-config.mjs
       - run: docker compose config --quiet
       - run: docker compose up -d --wait postgres redis
       - run: pnpm test:integration

@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
-import { openAiErrorSchema } from "@sculpin/api-contracts";
+import { Writable } from "node:stream";
+import { openAiErrorSchema, requestIdSchema } from "@sculpin/api-contracts";
+import { createLogger } from "@sculpin/observability";
 import type { ProxyConfig } from "@sculpin/config";
 import type { Database } from "@sculpin/db";
 import {
   createTestRouteRegistry,
   emptyProductionRouteRegistry,
 } from "./registry.js";
-import { createProductionProxyServer, createProxyServer } from "./server.js";
+import {
+  createProductionProxyServer,
+  createProxyServer,
+  trustedRequestId,
+} from "./server.js";
 const config: ProxyConfig = {
   environment: "test",
   logLevel: "silent",
@@ -211,6 +217,62 @@ describe("proxy client error semantics", () => {
     expect(String(response.headers["x-request-id"])).toMatch(
       /^[A-Za-z0-9-]{8,}$/,
     );
+    await server.close();
+  });
+  it("rejects control characters and oversized or repeated IDs", async () => {
+    const generated = "generated-request-id";
+    expect(trustedRequestId("control\u0001value", () => generated)).toBe(
+      generated,
+    );
+    expect(trustedRequestId("x".repeat(129), () => generated)).toBe(generated);
+    expect(
+      trustedRequestId(["first-valid-id", "second-valid-id"], () => generated),
+    ).toBe(generated);
+
+    const server = createProductionProxyServer(config, database());
+    const oversized = await server.inject({
+      url: "/v1",
+      headers: { "x-request-id": "x".repeat(129) },
+    });
+    expect(
+      requestIdSchema.safeParse(oversized.headers["x-request-id"]).success,
+    ).toBe(true);
+    const repeated = await server.inject({
+      url: "/v1",
+      headers: { "x-request-id": ["first-valid-id", "second-valid-id"] },
+    });
+    expect(repeated.headers["x-request-id"]).not.toBe("first-valid-id");
+    expect(
+      requestIdSchema.safeParse(repeated.headers["x-request-id"]).success,
+    ).toBe(true);
+    await server.close();
+  });
+  it("uses only the trusted request ID in response headers and logs", async () => {
+    let output = "";
+    const sink = new Writable({
+      write(chunk: Buffer | string, _encoding, callback) {
+        output += chunk.toString();
+        callback();
+      },
+    });
+    const logger = createLogger(
+      { service: "proxy", environment: "test", level: "info" },
+      sink,
+    );
+    const server = createProxyServer(config, {
+      database: database(),
+      registry: emptyProductionRouteRegistry(),
+      logger,
+    });
+    const invalid = "invalid id must not leak";
+    const response = await server.inject({
+      url: "/v1",
+      headers: { "x-request-id": invalid },
+    });
+    const finalId = String(response.headers["x-request-id"]);
+    expect(requestIdSchema.safeParse(finalId).success).toBe(true);
+    expect(output).toContain(finalId);
+    expect(output).not.toContain(invalid);
     await server.close();
   });
   it("leaves injected databases caller-owned", async () => {
