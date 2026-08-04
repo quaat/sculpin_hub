@@ -8,8 +8,8 @@ const shutdown = createShutdownController({
   timeoutMs: config.shutdownTimeoutMs,
   logger: server.log,
   exit: (code) => process.exit(code),
-  setTimer,
-  clearTimer,
+  setTimer: (callback, delay) => setTimeout(callback, delay),
+  clearTimer: (timer) => clearTimeout(timer),
 });
 process.once("SIGTERM", () => {
   void shutdown("SIGTERM");

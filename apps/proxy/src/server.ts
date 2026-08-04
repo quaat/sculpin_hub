@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, {
+  type FastifyBaseLogger,
+  type FastifyInstance,
+  type FastifyReply,
+} from "fastify";
 import type { Logger } from "pino";
 import { requestIdSchema, unsupportedOperation } from "@sculpin/api-contracts";
 import type { ProxyConfig } from "@sculpin/config";
@@ -30,7 +34,9 @@ export function createProxyServer(
   config: ProxyConfig,
   dependencies: ServerDependencies,
 ): FastifyInstance {
-  const logger =
+  // Widen to FastifyBaseLogger so the instance keeps the default
+  // FastifyInstance typing instead of binding to pino's Logger type.
+  const logger: FastifyBaseLogger =
     dependencies.logger ??
     createLogger({
       service: "proxy",
@@ -89,10 +95,8 @@ export function createProxyServer(
     });
   });
   registerRoutes(server, dependencies.registry);
-  const unsupported = (
-    _request: unknown,
-    reply: import("fastify").FastifyReply,
-  ) => reply.code(404).send(unsupportedOperation());
+  const unsupported = (_request: unknown, reply: FastifyReply) =>
+    reply.code(404).send(unsupportedOperation());
   server.all("/v1", unsupported);
   server.all("/v1/", unsupported);
   server.all("/v1/*", unsupported);

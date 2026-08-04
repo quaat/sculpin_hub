@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { GET as live } from "./live/route";
 import { createReadinessHandler } from "./ready/handler";
-const env = {
+const env: NodeJS.ProcessEnv = {
   NODE_ENV: "test",
   DATABASE_URL: "postgresql://test:test@localhost/test",
 };

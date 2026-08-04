@@ -29,8 +29,8 @@ const shutdown = createShutdownController({
   timeoutMs: config.shutdownTimeoutMs,
   logger,
   exit: (code) => process.exit(code),
-  setTimer,
-  clearTimer,
+  setTimer: (callback, delay) => setTimeout(callback, delay),
+  clearTimer: (timer) => clearTimeout(timer),
 });
 process.once("SIGTERM", () => {
   void shutdown("SIGTERM");

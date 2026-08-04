@@ -21,8 +21,10 @@ const config: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
-  async headers() {
-    return [{ source: "/:path*", headers: browserSecurityHeaders() }];
+  headers() {
+    return Promise.resolve([
+      { source: "/:path*", headers: browserSecurityHeaders() },
+    ]);
   },
 };
 export default config;

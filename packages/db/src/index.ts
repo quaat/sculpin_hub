@@ -1,4 +1,4 @@
-import { Pool, type PoolConfig } from "pg";
+import { Pool, type PoolConfig, type QueryConfig } from "pg";
 export interface Database {
   readonly pool: Pool;
   ready(): Promise<boolean>;
@@ -24,15 +24,17 @@ export function createDatabase(
     idleTimeoutMillis: 30_000,
     ...poolOptions,
   });
-  pool.on("error", onPoolError);
+  pool.on("error", (error) => onPoolError(error));
   let closePromise: Promise<void> | undefined;
   return {
     pool,
     async ready() {
-      const result = await pool.query<{ ready: number }>({
+      // query_timeout is honored by pg at runtime but missing from QueryConfig.
+      const readinessQuery: QueryConfig & { query_timeout: number } = {
         text: "SELECT 1 AS ready",
         query_timeout: readinessTimeoutMs,
-      });
+      };
+      const result = await pool.query<{ ready: number }>(readinessQuery);
       return result.rows[0]?.ready === 1;
     },
     close() {

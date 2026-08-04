@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { readinessResponseSchema } from "@sculpin/api-contracts";
 import { parseWebConfig } from "@sculpin/config";
 import type { Database } from "@sculpin/db";
-import type { Logger } from "pino";
+import type { Logger } from "@sculpin/observability";
 
 type DatabaseFactory = (url: string) => Database;
 export function createReadinessHandler(

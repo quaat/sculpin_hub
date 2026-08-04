@@ -34,13 +34,13 @@ describe("worker shutdown", () => {
   });
   it("forces exit when shutdown times out", () => {
     const exit = vi.fn();
-    let callback = () => undefined;
+    let callback: () => void = () => undefined;
     void createShutdownController({
       shutdown: () => new Promise(() => undefined),
       timeoutMs: 10,
       logger: { info: vi.fn(), error: vi.fn(), fatal: vi.fn() },
       exit,
-      setTimer: vi.fn((fn) => {
+      setTimer: vi.fn((fn: () => void) => {
         callback = fn;
         return timer;
       }),

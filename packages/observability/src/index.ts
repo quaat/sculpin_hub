@@ -3,6 +3,7 @@ import pino, {
   type Logger,
   type LoggerOptions,
 } from "pino";
+export type { Logger } from "pino";
 export const REDACTED = "[Redacted]";
 export const redactionPaths = [
   "authorization",
