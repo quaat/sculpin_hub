@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
+import { Writable } from "node:stream";
+import { openAiErrorSchema, requestIdSchema } from "@sculpin/api-contracts";
+import { createLogger } from "@sculpin/observability";
 import type { ProxyConfig } from "@sculpin/config";
 import type { Database } from "@sculpin/db";
 import {
   createTestRouteRegistry,
   emptyProductionRouteRegistry,
 } from "./registry.js";
-import { createProductionProxyServer, createProxyServer } from "./server.js";
+import {
+  createProductionProxyServer,
+  createProxyServer,
+  trustedRequestId,
+} from "./server.js";
 const config: ProxyConfig = {
   environment: "test",
   logLevel: "silent",
@@ -13,6 +20,7 @@ const config: ProxyConfig = {
   port: 3001,
   host: "127.0.0.1",
   bodyLimitBytes: 4096,
+  shutdownTimeoutMs: 10000,
 };
 function database(ready = true): Database {
   return {
@@ -24,11 +32,16 @@ function database(ready = true): Database {
 describe("proxy foundation", () => {
   it("serves liveness and accurate readiness", async () => {
     const server = createProductionProxyServer(config, database(true));
-    expect((await server.inject("/health/live")).json()).toEqual({
+    const live = await server.inject("/health/live");
+    expect(live.json()).toEqual({
       status: "ok",
       service: "proxy",
     });
-    expect((await server.inject("/health/ready")).statusCode).toBe(200);
+    expect(live.headers["cache-control"]).toBe("no-store");
+    const ready = await server.inject("/health/ready");
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toEqual({ status: "ready", service: "proxy" });
+    expect(ready.headers["cache-control"]).toBe("no-store");
     await server.close();
   });
   it("returns 503 when the database is unavailable", async () => {
@@ -100,9 +113,184 @@ describe("proxy foundation", () => {
     const response = await server.inject("/v1/test-error");
     expect(response.statusCode).toBe(500);
     expect(response.body).not.toContain("canary internal stack");
-    expect(response.json<{ error: { code: string } }>().error.code).toBe(
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
       "internal_error",
     );
     await server.close();
+  });
+});
+
+describe("proxy client error semantics", () => {
+  it("returns safe 400 for malformed JSON", async () => {
+    const server = createProductionProxyServer(config, database());
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/example",
+      headers: { "content-type": "application/json" },
+      payload: '{"broken":',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+      "invalid_json",
+    );
+    expect(response.body).not.toContain("broken");
+    expect(response.headers["cache-control"]).toBe("no-store");
+    await server.close();
+  });
+  it("returns safe 413 for an oversized body", async () => {
+    const server = createProductionProxyServer(config, database());
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/example",
+      payload: { value: "x".repeat(5000) },
+    });
+    expect(response.statusCode).toBe(413);
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+      "request_too_large",
+    );
+    await server.close();
+  });
+  it("returns safe 415 for unsupported media", async () => {
+    const server = createProductionProxyServer(config, database());
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/example",
+      headers: { "content-type": "application/xml" },
+      payload: "<x/>",
+    });
+    expect(response.statusCode).toBe(415);
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+      "unsupported_media_type",
+    );
+    await server.close();
+  });
+  it("returns safe 400 for invalid request input", async () => {
+    const registry = createTestRouteRegistry([
+      {
+        method: "POST",
+        path: "/v1/test-invalid",
+        handler: () => {
+          throw Object.assign(new Error("canary validation detail"), {
+            statusCode: 400,
+            validation: [],
+          });
+        },
+      },
+    ]);
+    const server = createProxyServer(config, {
+      database: database(),
+      registry,
+    });
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/test-invalid",
+    });
+    expect(response.statusCode).toBe(400);
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+      "invalid_request",
+    );
+    expect(response.body).not.toContain("canary validation detail");
+    await server.close();
+  });
+  it.each([
+    ["GET", "/v1"],
+    ["POST", "/v1/"],
+    ["DELETE", "/v1/nested/operation"],
+  ] as const)("normalizes %s %s as unsupported", async (method, url) => {
+    const server = createProductionProxyServer(config, database());
+    const response = await server.inject({ method, url });
+    expect(response.statusCode).toBe(404);
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+      "unsupported_operation",
+    );
+    expect(response.headers["x-request-id"]).toBeTruthy();
+    expect(response.headers["cache-control"]).toBe("no-store");
+    await server.close();
+  });
+  it("replaces an unsafe request ID", async () => {
+    const server = createProductionProxyServer(config, database());
+    const response = await server.inject({
+      url: "/v1",
+      headers: { "x-request-id": "unsafe id with spaces" },
+    });
+    expect(response.headers["x-request-id"]).not.toBe("unsafe id with spaces");
+    expect(String(response.headers["x-request-id"])).toMatch(
+      /^[A-Za-z0-9-]{8,}$/,
+    );
+    await server.close();
+  });
+  it("rejects control characters and oversized or repeated IDs", async () => {
+    const generated = "generated-request-id";
+    expect(trustedRequestId("control\u0001value", () => generated)).toBe(
+      generated,
+    );
+    expect(trustedRequestId("x".repeat(129), () => generated)).toBe(generated);
+    expect(
+      trustedRequestId(["first-valid-id", "second-valid-id"], () => generated),
+    ).toBe(generated);
+
+    const server = createProductionProxyServer(config, database());
+    const oversized = await server.inject({
+      url: "/v1",
+      headers: { "x-request-id": "x".repeat(129) },
+    });
+    expect(
+      requestIdSchema.safeParse(oversized.headers["x-request-id"]).success,
+    ).toBe(true);
+    const repeated = await server.inject({
+      url: "/v1",
+      headers: { "x-request-id": ["first-valid-id", "second-valid-id"] },
+    });
+    expect(repeated.headers["x-request-id"]).not.toBe("first-valid-id");
+    expect(
+      requestIdSchema.safeParse(repeated.headers["x-request-id"]).success,
+    ).toBe(true);
+    await server.close();
+  });
+  it("uses only the trusted request ID in response headers and logs", async () => {
+    let output = "";
+    const sink = new Writable({
+      write(chunk: Buffer | string, _encoding, callback) {
+        output += chunk.toString();
+        callback();
+      },
+    });
+    const logger = createLogger(
+      { service: "proxy", environment: "test", level: "info" },
+      sink,
+    );
+    const server = createProxyServer(config, {
+      database: database(),
+      registry: emptyProductionRouteRegistry(),
+      logger,
+    });
+    const invalid = "invalid id must not leak";
+    const response = await server.inject({
+      url: "/v1",
+      headers: { "x-request-id": invalid },
+    });
+    const finalId = String(response.headers["x-request-id"]);
+    expect(requestIdSchema.safeParse(finalId).success).toBe(true);
+    expect(output).toContain(finalId);
+    expect(output).not.toContain(invalid);
+    await server.close();
+  });
+  it("leaves injected databases caller-owned", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const injected = { ...database(), close };
+    const server = createProductionProxyServer(config, injected);
+    await server.close();
+    expect(close).not.toHaveBeenCalled();
+  });
+  it("closes server-created databases exactly once", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const owned = { ...database(), close };
+    const server = createProxyServer(config, {
+      registry: emptyProductionRouteRegistry(),
+      databaseFactory: () => owned,
+    });
+    await server.close();
+    await server.close();
+    expect(close).toHaveBeenCalledOnce();
   });
 });

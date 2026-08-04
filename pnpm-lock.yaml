@@ -20,6 +20,9 @@ importers:
       prettier:
         specifier: 3.6.2
         version: 3.6.2
+      tsx:
+        specifier: 4.20.5
+        version: 4.20.5
       turbo:
         specifier: 2.5.6
         version: 2.5.6
@@ -88,6 +91,9 @@ importers:
       '@types/react-dom':
         specifier: 19.1.7
         version: 19.1.7(@types/react@19.1.10)
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@22.17.2)(tsx@4.20.5)
 
   apps/worker:
     dependencies:

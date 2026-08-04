@@ -11,7 +11,7 @@ export const healthResponseSchema = z.object({
 export const readinessResponseSchema = z.object({
   status: z.enum(["ready", "not_ready"]),
   service: z.string().min(1),
-  dependencies: z.record(z.string(), z.enum(["up", "down"])),
+  dependencies: z.record(z.string(), z.enum(["up", "down"])).optional(),
 });
 export const controlPlaneErrorSchema = z.object({
   error: z.object({
@@ -48,6 +48,27 @@ export function internalProxyError(): OpenAiError {
       type: "api_error",
       param: null,
       code: "internal_error",
+    },
+  };
+}
+export type ProxyClientErrorCode =
+  | "invalid_json"
+  | "invalid_request"
+  | "request_too_large"
+  | "unsupported_media_type";
+export function proxyClientError(code: ProxyClientErrorCode): OpenAiError {
+  const messages: Record<ProxyClientErrorCode, string> = {
+    invalid_json: "The request body is not valid JSON.",
+    invalid_request: "The request input is invalid.",
+    request_too_large: "The request body exceeds the allowed size.",
+    unsupported_media_type: "The request media type is not supported.",
+  };
+  return {
+    error: {
+      message: messages[code],
+      type: "invalid_request_error",
+      param: null,
+      code,
     },
   };
 }

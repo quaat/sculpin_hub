@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import HomePage from "./page";
 import Products from "./products/page";
@@ -25,5 +26,10 @@ describe("public pages", () => {
     expect(renderToStaticMarkup(<Dashboard />)).toContain(
       "does not indicate that you are signed in",
     );
+  });
+  it("disables smooth scrolling for reduced-motion preferences", () => {
+    const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+    expect(css).toContain("prefers-reduced-motion: reduce");
+    expect(css).toMatch(/prefers-reduced-motion[\s\S]*scroll-behavior:\s*auto/);
   });
 });

@@ -9,7 +9,9 @@ The slice needs reproducible strict TypeScript builds with a current supported r
 
 ## Decision
 
-Pin Node.js 22.22.2, pnpm 10.28.1, strict TypeScript, ESLint flat configuration, Prettier, Vitest, Next.js for web, and Fastify for proxy. Exact dependency versions and the lockfile are committed. PostgreSQL access uses the small `pg` client layer in this model-free slice; Prisma is deferred until the first meaningful domain migration, because generating a client with meaningless tables would create false domain commitments.
+Pin Node.js 22.22.2, pnpm 10.28.1, strict TypeScript, ESLint flat configuration, Prettier, Vitest, Next.js for web, and Fastify for proxy. Exact dependency versions and a generated lockfile are required for review. PostgreSQL access uses the small `pg` client layer in this model-free slice; Prisma is deferred until the first meaningful domain migration, because generating a client with meaningless tables would create false domain commitments.
+
+Development scripts use Node's `--env-file` flag to load the repository-root `.env` explicitly. Production entry points never load files and accept configuration only through the process environment. The web workload uses Next.js's standard `PORT` variable. PostgreSQL readiness is bounded, pool errors have a caller-supplied safe handler, repeated close is idempotent, and singleton reuse rejects a different connection target.
 
 ## Alternatives
 
@@ -17,7 +19,7 @@ Unpinned versions are irreproducible. Installing Auth.js, Stripe, Azure SDKs, Pr
 
 ## Consequences
 
-The baseline is small and testable. The next schema PR must re-evaluate supported Prisma/Node versions, add Prisma deliberately, and migrate from the narrow `Database` seam.
+The baseline is small and testable. Local scripts depend on the pinned Node runtime rather than a dotenv package. The next schema PR must re-evaluate supported Prisma/Node versions, add Prisma deliberately, and migrate from the narrow `Database` seam.
 
 ## Security considerations
 
@@ -26,3 +28,5 @@ Lock dependencies, scan updates, use strict compilation, validate configuration,
 ## Follow-up decisions
 
 Record Prisma/query-layer selection with the first domain schema; establish dependency update ownership.
+
+The portable web application does not emit HSTS. The production TLS edge owns HSTS because only the deployment layer can verify HTTPS termination and domain/subdomain control; `includeSubDomains` must not be enabled without an explicit domain review.

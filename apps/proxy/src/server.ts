@@ -1,21 +1,34 @@
 import { randomUUID } from "node:crypto";
-import Fastify, { type FastifyBaseLogger, type FastifyInstance } from "fastify";
-import {
-  internalProxyError,
-  requestIdSchema,
-  unsupportedOperation,
-} from "@sculpin/api-contracts";
+import Fastify, {
+  type FastifyBaseLogger,
+  type FastifyInstance,
+  type FastifyReply,
+} from "fastify";
+import type { Logger } from "pino";
+import { requestIdSchema, unsupportedOperation } from "@sculpin/api-contracts";
 import type { ProxyConfig } from "@sculpin/config";
 import { createDatabase, type Database } from "@sculpin/db";
 import { createLogger } from "@sculpin/observability";
+import { isV1Path, mapProxyError } from "./errors.js";
 import {
   emptyProductionRouteRegistry,
   registerRoutes,
   type RouteRegistry,
 } from "./registry.js";
 export interface ServerDependencies {
+  /** Injected databases remain caller-owned and are never closed by the server. */
   database?: Database;
+  databaseFactory?: () => Database;
   registry: RouteRegistry;
+  logger?: Logger;
+}
+export function trustedRequestId(
+  header: string | readonly string[] | undefined,
+  generate: () => string = randomUUID,
+): string {
+  return typeof header === "string" && requestIdSchema.safeParse(header).success
+    ? header
+    : generate();
 }
 export function createProxyServer(
   config: ProxyConfig,
@@ -23,27 +36,31 @@ export function createProxyServer(
 ): FastifyInstance {
   // Widen to FastifyBaseLogger so the instance keeps the default
   // FastifyInstance typing instead of binding to pino's Logger type.
-  const logger: FastifyBaseLogger = createLogger({
-    service: "proxy",
-    environment: config.environment,
-    level: config.logLevel,
-  });
-  const database = dependencies.database ?? createDatabase(config.databaseUrl);
+  const logger: FastifyBaseLogger =
+    dependencies.logger ??
+    createLogger({
+      service: "proxy",
+      environment: config.environment,
+      level: config.logLevel,
+    });
+  const ownsDatabase = dependencies.database === undefined;
+  const database =
+    dependencies.database ??
+    dependencies.databaseFactory?.() ??
+    createDatabase(config.databaseUrl, {
+      onPoolError: (error) =>
+        logger.error({ err: error }, "database pool error"),
+    });
   const server = Fastify({
     loggerInstance: logger,
     bodyLimit: config.bodyLimitBytes,
-    requestIdHeader: "x-request-id",
-    genReqId: (request) => {
-      const candidate = request.headers["x-request-id"];
-      return typeof candidate === "string" &&
-        requestIdSchema.safeParse(candidate).success
-        ? candidate
-        : randomUUID();
-    },
+    genReqId: (request) => trustedRequestId(request.headers["x-request-id"]),
     disableRequestLogging: true,
   });
   server.addHook("onRequest", (request, _reply, done) => {
     _reply.header("x-request-id", request.id);
+    if (isV1Path(request.url) || request.url.startsWith("/health/"))
+      _reply.header("cache-control", "no-store");
     request.log.info(
       {
         requestId: request.id,
@@ -68,7 +85,6 @@ export function createProxyServer(
         return {
           status: "ready",
           service: "proxy",
-          dependencies: { database: "up" },
         };
     } catch (error) {
       server.log.warn({ err: error }, "readiness dependency failed");
@@ -76,18 +92,33 @@ export function createProxyServer(
     return reply.code(503).send({
       status: "not_ready",
       service: "proxy",
-      dependencies: { database: "down" },
     });
   });
   registerRoutes(server, dependencies.registry);
-  server.all("/v1/*", async (_request, reply) =>
-    reply.code(404).send(unsupportedOperation()),
-  );
+  const unsupported = (_request: unknown, reply: FastifyReply) =>
+    reply.code(404).send(unsupportedOperation());
+  server.all("/v1", unsupported);
+  server.all("/v1/", unsupported);
+  server.all("/v1/*", unsupported);
   server.setErrorHandler((error, request, reply) => {
-    request.log.error({ err: error, requestId: request.id }, "request failed");
-    void reply.code(500).send(internalProxyError());
+    const mapped = mapProxyError(error);
+    const level = mapped.statusCode >= 500 ? "error" : "warn";
+    request.log[level](
+      { err: error, requestId: request.id, errorCode: mapped.body.error.code },
+      "request failed",
+    );
+    if (isV1Path(request.url))
+      void reply.code(mapped.statusCode).send(mapped.body);
+    else
+      void reply.code(mapped.statusCode).send({
+        error: {
+          code: mapped.body.error.code,
+          message: mapped.body.error.message,
+          requestId: request.id,
+        },
+      });
   });
-  server.addHook("onClose", async () => database.close());
+  if (ownsDatabase) server.addHook("onClose", () => database.close());
   return server;
 }
 export function createProductionProxyServer(

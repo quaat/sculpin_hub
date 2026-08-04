@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000",
+    "predev": "pnpm --workspace-root turbo build --filter=@sculpin/web^...",
+    "dev": "node --env-file=../../.env ./node_modules/next/dist/bin/next dev",
     "build": "next build",
-    "start": "next start -p 3000",
+    "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@types/react": "19.1.10",
-    "@types/react-dom": "19.1.7"
+    "@types/react-dom": "19.1.7",
+    "vitest": "3.2.4"
   }
 }

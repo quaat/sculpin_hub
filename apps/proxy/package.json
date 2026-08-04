@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "predev": "pnpm --workspace-root turbo build --filter=@sculpin/proxy^...",
+    "dev": "node --env-file=../../.env --import tsx --watch src/main.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "lint": "eslint src",

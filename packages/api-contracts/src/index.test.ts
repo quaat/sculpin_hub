@@ -3,6 +3,7 @@ import {
   internalProxyError,
   openAiErrorSchema,
   requestIdSchema,
+  proxyClientError,
   unsupportedOperation,
 } from "./index.js";
 describe("API contracts", () => {
@@ -16,6 +17,11 @@ describe("API contracts", () => {
     );
     expect(JSON.stringify(internalProxyError())).not.toMatch(
       /stack|database|exception/i,
+    );
+  });
+  it("creates safe categorized client errors", () => {
+    expect(proxyClientError("request_too_large").error.code).toBe(
+      "request_too_large",
     );
   });
 });

@@ -5,7 +5,11 @@ function capture() {
   let output = "";
   return {
     sink: new Writable({
-      write(chunk: Buffer, _encoding, callback) {
+      write(
+        chunk: Buffer | string,
+        _encoding: BufferEncoding,
+        callback: (error?: Error | null) => void,
+      ) {
         output += chunk.toString();
         callback();
       },
@@ -59,5 +63,51 @@ describe("structured logging", () => {
       "failed safely",
     );
     expect(target.read()).not.toContain("canary-exception-secret");
+  });
+  it("does not permit extensions to override protected error serialization", () => {
+    const target = capture();
+    createLogger({ service: "test", environment: "test" }, target.sink, {
+      serializers: { err: () => ({ message: "canary-override-secret" }) },
+    }).error({ err: new Error("canary-error-secret") }, "failed safely");
+    expect(target.read()).not.toMatch(/canary-(override|error)-secret/);
+  });
+  it("redacts database passwords, connection values, and OAuth client secrets", () => {
+    const target = capture();
+    createLogger({ service: "test", environment: "test" }, target.sink).info(
+      {
+        config: {
+          databaseUrl: "postgresql://user:canary-db-password@db/test",
+          DATABASE_URL: "canary-database-url",
+        },
+        credentials: {
+          password: "canary-password",
+          client_secret: "canary-client-secret",
+          clientSecret: "canary-client-secret-camel",
+          connectionString: "canary-connection",
+        },
+      },
+      "configuration checked",
+    );
+    expect(target.read()).not.toMatch(
+      /canary-(db-password|database-url|password|client-secret|connection)/,
+    );
+  });
+  it("constructs successfully and redacts hyphenated set-cookie fields", () => {
+    const target = capture();
+    const logger = createLogger(
+      { service: "test", environment: "test" },
+      target.sink,
+    );
+    logger.info(
+      {
+        "set-cookie": "top-level-canary",
+        res: { headers: { "set-cookie": "response-canary" } },
+        headers: { "set-cookie": "wildcard-canary" },
+      },
+      "cookies emitted safely",
+    );
+    expect(target.read()).not.toMatch(
+      /top-level-canary|response-canary|wildcard-canary/,
+    );
   });
 });

@@ -1,14 +1,24 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalPassThroughEnv": ["TMPDIR"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
-    "dev": { "cache": false, "persistent": true },
-    "lint": { "dependsOn": ["^build"] },
-    "typecheck": { "dependsOn": ["^build"] },
-    "test": { "dependsOn": ["^build"], "outputs": ["coverage/**"] }
-  }
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": {
+      "dependsOn": ["^build"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": ["coverage/**"]
+    }
+  },
+  "globalPassThroughEnv": ["TMPDIR"]
 }

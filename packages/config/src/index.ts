@@ -23,13 +23,12 @@ export interface CommonConfig {
   logLevel: string;
   databaseUrl: string;
 }
-export interface WebConfig extends CommonConfig {
-  port: number;
-}
+export type WebConfig = CommonConfig;
 export interface ProxyConfig extends CommonConfig {
   port: number;
   host: string;
   bodyLimitBytes: number;
+  shutdownTimeoutMs: number;
 }
 export interface WorkerConfig extends CommonConfig {
   shutdownTimeoutMs: number;
@@ -69,11 +68,8 @@ function common(value: z.infer<typeof baseSchema>): CommonConfig {
   };
 }
 export function parseWebConfig(input: NodeJS.ProcessEnv): WebConfig {
-  const value = parse(
-    baseSchema.extend({ WEB_PORT: port.default(3000) }),
-    input,
-  );
-  const result = { ...common(value), port: value.WEB_PORT };
+  const value = parse(baseSchema, input);
+  const result = common(value);
   assertProductionDatabaseSafety(result);
   return result;
 }
@@ -88,6 +84,12 @@ export function parseProxyConfig(input: NodeJS.ProcessEnv): ProxyConfig {
         .min(1024)
         .max(10 * 1024 * 1024)
         .default(1024 * 1024),
+      PROXY_SHUTDOWN_TIMEOUT_MS: z.coerce
+        .number()
+        .int()
+        .min(1000)
+        .max(60000)
+        .default(10000),
     })
     .superRefine((value, context) => {
       if (
@@ -108,6 +110,7 @@ export function parseProxyConfig(input: NodeJS.ProcessEnv): ProxyConfig {
     port: value.PROXY_PORT,
     host: value.PROXY_HOST,
     bodyLimitBytes: value.PROXY_BODY_LIMIT_BYTES,
+    shutdownTimeoutMs: value.PROXY_SHUTDOWN_TIMEOUT_MS,
   };
   assertProductionDatabaseSafety(result);
   return result;

@@ -10,7 +10,7 @@ const valid = {
 };
 describe("runtime configuration", () => {
   it("parses separate valid application configuration", () => {
-    expect(parseWebConfig({ ...valid, WEB_PORT: "3100" }).port).toBe(3100);
+    expect(parseWebConfig(valid).environment).toBe("test");
     expect(
       parseProxyConfig({ ...valid, PROXY_PORT: "3101" }).bodyLimitBytes,
     ).toBe(1048576);
@@ -20,8 +20,8 @@ describe("runtime configuration", () => {
     expect(() => parseWebConfig({ DATABASE_URL: "" })).toThrow("DATABASE_URL");
   });
   it("rejects invalid ports and URLs", () => {
-    expect(() => parseWebConfig({ ...valid, WEB_PORT: "70000" })).toThrow(
-      "WEB_PORT",
+    expect(() => parseProxyConfig({ ...valid, PROXY_PORT: "70000" })).toThrow(
+      "PROXY_PORT",
     );
     expect(() =>
       parseWebConfig({

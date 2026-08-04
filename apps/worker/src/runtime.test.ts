@@ -7,7 +7,11 @@ describe("worker runtime", () => {
   it("initializes the database, stays idle without handlers, and shuts down once", async () => {
     const ready = vi.fn().mockResolvedValue(true);
     const close = vi.fn().mockResolvedValue(undefined);
-    const db: Database = { pool: {} as never, ready, close };
+    const db: Database = {
+      pool: {} as never,
+      ready,
+      close,
+    };
     const logger = { info: vi.fn() } as unknown as Logger;
     const runtime = new WorkerRuntime(db, createIdleJobRunner(), logger);
     await runtime.start();

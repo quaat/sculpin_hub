@@ -13,14 +13,41 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: pnpm/action-setup@v4 # v4; pin after upstream SHA verification
         with: { version: 10.28.1, run_install: false }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+      - run: cp .env.example .env && pnpm env:smoke
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+  integration-and-containers:
+    needs: validate
+    env:
+      POSTGRES_PASSWORD: ci-foundation-password
+      DATABASE_URL: postgresql://sculpin:ci-foundation-password@127.0.0.1:5432/sculpin_hub
+      SMOKE_NODE_ENV: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: pnpm/action-setup@v4 # v4; pin after upstream SHA verification
+        with: { version: 10.28.1, run_install: false }
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: cp .env.example .env
+      - run: node scripts/check-ci-database-config.mjs
+      - run: docker compose config --quiet
+      - run: docker compose up -d --wait postgres redis
+      - run: pnpm test:integration
+      - run: docker build -f apps/web/Dockerfile -t sculpin-hub-web .
+      - run: docker build -f apps/proxy/Dockerfile -t sculpin-hub-proxy .
+      - run: docker build -f apps/worker/Dockerfile -t sculpin-hub-worker .
+      - run: ./scripts/container-smoke.sh
+      - if: always()
+        run: docker compose down --volumes

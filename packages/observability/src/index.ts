@@ -3,6 +3,7 @@ import pino, {
   type Logger,
   type LoggerOptions,
 } from "pino";
+export type { Logger } from "pino";
 export const REDACTED = "[Redacted]";
 export const redactionPaths = [
   "authorization",
@@ -21,6 +22,18 @@ export const redactionPaths = [
   "*.apiKey",
   "*.upstreamCredential",
   "*.upstream_credentials",
+  "*.client_secret",
+  "*.clientSecret",
+  "*.password",
+  "*.databaseUrl",
+  "*.DATABASE_URL",
+  "*.connectionString",
+  "*.*.client_secret",
+  "*.*.clientSecret",
+  "*.*.password",
+  "*.*.databaseUrl",
+  "*.*.DATABASE_URL",
+  "*.*.connectionString",
   "access_token",
   "refresh_token",
   "id_token",
@@ -28,6 +41,12 @@ export const redactionPaths = [
   "apiKey",
   "upstreamCredential",
   "upstream_credentials",
+  "client_secret",
+  "clientSecret",
+  "password",
+  "databaseUrl",
+  "DATABASE_URL",
+  "connectionString",
 ];
 export interface LoggerContext {
   service: string;
@@ -49,6 +68,8 @@ export function createLogger(
     base: { service: context.service, environment: context.environment },
     redact: { paths: redactionPaths, censor: REDACTED },
     serializers: {
+      ...extensions.serializers,
+      // Security invariant: caller extensions cannot replace this serializer.
       err: (error: unknown) => {
         if (typeof error !== "object" || error === null)
           return { type: "Error" };
@@ -58,7 +79,6 @@ export function createLogger(
           ...(typeof value.code === "string" ? { code: value.code } : {}),
         };
       },
-      ...extensions.serializers,
     },
   };
   return destination ? pino(options, destination) : pino(options);
