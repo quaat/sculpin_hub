@@ -1,0 +1,24 @@
+{
+  "name": "@sculpin/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "lint": "eslint src",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sculpin/config": "workspace:*",
+    "@sculpin/db": "workspace:*",
+    "@sculpin/jobs": "workspace:*",
+    "@sculpin/observability": "workspace:*",
+    "pino": "9.9.0"
+  },
+  "devDependencies": {
+    "tsx": "4.20.5"
+  }
+}
