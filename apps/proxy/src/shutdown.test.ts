@@ -21,9 +21,7 @@ describe("proxy shutdown", () => {
     const exit = vi.fn();
     const error = vi.fn();
     const controller = createShutdownController({
-      shutdown: async () => {
-        throw new Error("canary");
-      },
+      shutdown: () => Promise.reject(new Error("canary")),
       timeoutMs: 10,
       logger: { info: vi.fn(), error, fatal: vi.fn() },
       exit,
@@ -37,7 +35,7 @@ describe("proxy shutdown", () => {
   it("forces exit when shutdown times out", () => {
     const exit = vi.fn();
     let callback = () => undefined;
-    createShutdownController({
+    void createShutdownController({
       shutdown: () => new Promise(() => undefined),
       timeoutMs: 10,
       logger: { info: vi.fn(), error: vi.fn(), fatal: vi.fn() },

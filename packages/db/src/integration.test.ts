@@ -4,7 +4,7 @@ const enabled = process.env.RUN_DATABASE_INTEGRATION === "true";
 const suite = enabled ? describe : describe.skip;
 suite("PostgreSQL integration", () => {
   let database: Database | undefined;
-  afterAll(async () => database?.close());
+  afterAll(() => database?.close());
   it("executes the real SELECT 1 readiness query", async () => {
     const url = process.env.DATABASE_URL;
     if (!url)

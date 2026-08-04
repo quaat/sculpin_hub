@@ -13,28 +13,16 @@ export const securityHeaders = [
   },
   { key: "X-Frame-Options", value: "DENY" },
 ] as const;
-export function browserSecurityHeaders(environment: string | undefined) {
-  return environment === "production"
-    ? [
-        ...securityHeaders,
-        {
-          key: "Strict-Transport-Security",
-          value: "max-age=31536000; includeSubDomains",
-        },
-      ]
-    : [...securityHeaders];
+/** HSTS is owned by the production TLS edge, which has the required domain context. */
+export function browserSecurityHeaders() {
+  return [...securityHeaders];
 }
 const config: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
   reactStrictMode: true,
   async headers() {
-    return [
-      {
-        source: "/:path*",
-        headers: browserSecurityHeaders(process.env.NODE_ENV),
-      },
-    ];
+    return [{ source: "/:path*", headers: browserSecurityHeaders() }];
   },
 };
 export default config;

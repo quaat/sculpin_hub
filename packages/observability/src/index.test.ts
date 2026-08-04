@@ -5,7 +5,11 @@ function capture() {
   let output = "";
   return {
     sink: new Writable({
-      write(chunk, _encoding, callback) {
+      write(
+        chunk: Buffer | string,
+        _encoding: BufferEncoding,
+        callback: (error?: Error | null) => void,
+      ) {
         output += chunk.toString();
         callback();
       },
@@ -86,6 +90,24 @@ describe("structured logging", () => {
     );
     expect(target.read()).not.toMatch(
       /canary-(db-password|database-url|password|client-secret|connection)/,
+    );
+  });
+  it("constructs successfully and redacts hyphenated set-cookie fields", () => {
+    const target = capture();
+    const logger = createLogger(
+      { service: "test", environment: "test" },
+      target.sink,
+    );
+    logger.info(
+      {
+        "set-cookie": "top-level-canary",
+        res: { headers: { "set-cookie": "response-canary" } },
+        headers: { "set-cookie": "wildcard-canary" },
+      },
+      "cookies emitted safely",
+    );
+    expect(target.read()).not.toMatch(
+      /top-level-canary|response-canary|wildcard-canary/,
     );
   });
 });

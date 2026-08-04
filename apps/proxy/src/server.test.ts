@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { openAiErrorSchema } from "@sculpin/api-contracts";
 import type { ProxyConfig } from "@sculpin/config";
 import type { Database } from "@sculpin/db";
 import {
@@ -106,7 +107,9 @@ describe("proxy foundation", () => {
     const response = await server.inject("/v1/test-error");
     expect(response.statusCode).toBe(500);
     expect(response.body).not.toContain("canary internal stack");
-    expect(response.json().error.code).toBe("internal_error");
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+      "internal_error",
+    );
     await server.close();
   });
 });
@@ -121,7 +124,9 @@ describe("proxy client error semantics", () => {
       payload: '{"broken":',
     });
     expect(response.statusCode).toBe(400);
-    expect(response.json().error.code).toBe("invalid_json");
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+      "invalid_json",
+    );
     expect(response.body).not.toContain("broken");
     expect(response.headers["cache-control"]).toBe("no-store");
     await server.close();
@@ -134,7 +139,9 @@ describe("proxy client error semantics", () => {
       payload: { value: "x".repeat(5000) },
     });
     expect(response.statusCode).toBe(413);
-    expect(response.json().error.code).toBe("request_too_large");
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+      "request_too_large",
+    );
     await server.close();
   });
   it("returns safe 415 for unsupported media", async () => {
@@ -146,7 +153,9 @@ describe("proxy client error semantics", () => {
       payload: "<x/>",
     });
     expect(response.statusCode).toBe(415);
-    expect(response.json().error.code).toBe("unsupported_media_type");
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+      "unsupported_media_type",
+    );
     await server.close();
   });
   it("returns safe 400 for invalid request input", async () => {
@@ -171,7 +180,9 @@ describe("proxy client error semantics", () => {
       url: "/v1/test-invalid",
     });
     expect(response.statusCode).toBe(400);
-    expect(response.json().error.code).toBe("invalid_request");
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+      "invalid_request",
+    );
     expect(response.body).not.toContain("canary validation detail");
     await server.close();
   });
@@ -183,7 +194,9 @@ describe("proxy client error semantics", () => {
     const server = createProductionProxyServer(config, database());
     const response = await server.inject({ method, url });
     expect(response.statusCode).toBe(404);
-    expect(response.json().error.code).toBe("unsupported_operation");
+    expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+      "unsupported_operation",
+    );
     expect(response.headers["x-request-id"]).toBeTruthy();
     expect(response.headers["cache-control"]).toBe("no-store");
     await server.close();
@@ -201,19 +214,21 @@ describe("proxy client error semantics", () => {
     await server.close();
   });
   it("leaves injected databases caller-owned", async () => {
-    const injected = database();
+    const close = vi.fn().mockResolvedValue(undefined);
+    const injected = { ...database(), close };
     const server = createProductionProxyServer(config, injected);
     await server.close();
-    expect(injected.close).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
   });
   it("closes server-created databases exactly once", async () => {
-    const owned = database();
+    const close = vi.fn().mockResolvedValue(undefined);
+    const owned = { ...database(), close };
     const server = createProxyServer(config, {
       registry: emptyProductionRouteRegistry(),
       databaseFactory: () => owned,
     });
     await server.close();
     await server.close();
-    expect(owned.close).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
   });
 });

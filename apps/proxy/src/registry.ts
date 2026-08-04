@@ -7,10 +7,7 @@ import type {
 export interface SyntheticRoute {
   method: HTTPMethods;
   path: `/v1/${string}`;
-  handler(
-    request: FastifyRequest,
-    reply: FastifyReply,
-  ): Promise<unknown> | unknown;
+  handler: (request: FastifyRequest, reply: FastifyReply) => unknown;
 }
 export interface RouteRegistry {
   readonly routes: readonly SyntheticRoute[];

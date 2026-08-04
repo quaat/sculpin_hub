@@ -67,7 +67,7 @@ export function createProxyServer(
     );
     done();
   });
-  server.get("/health/live", async () => ({ status: "ok", service: "proxy" }));
+  server.get("/health/live", () => ({ status: "ok", service: "proxy" }));
   server.get("/health/ready", async (_request, reply) => {
     try {
       if (await database.ready())
@@ -84,7 +84,7 @@ export function createProxyServer(
     });
   });
   registerRoutes(server, dependencies.registry);
-  const unsupported = async (
+  const unsupported = (
     _request: unknown,
     reply: import("fastify").FastifyReply,
   ) => reply.code(404).send(unsupportedOperation());
@@ -109,7 +109,7 @@ export function createProxyServer(
         },
       });
   });
-  if (ownsDatabase) server.addHook("onClose", async () => database.close());
+  if (ownsDatabase) server.addHook("onClose", () => database.close());
   return server;
 }
 export function createProductionProxyServer(

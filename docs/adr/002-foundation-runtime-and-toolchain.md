@@ -28,3 +28,5 @@ Lock dependencies, scan updates, use strict compilation, validate configuration,
 ## Follow-up decisions
 
 Record Prisma/query-layer selection with the first domain schema; establish dependency update ownership.
+
+The portable web application does not emit HSTS. The production TLS edge owns HSTS because only the deployment layer can verify HTTPS termination and domain/subdomain control; `includeSubDomains` must not be enabled without an explicit domain review.

@@ -92,3 +92,7 @@ The production Sculpin route registry remains empty. `/v1`, `/v1/`, and every un
 - [Architecture decisions](docs/adr/)
 
 The recommended next focused pull request is the first meaningful PostgreSQL domain baseline: users, external identities, personal organizations, memberships, audit events, and transactional outbox—without enabling OAuth until ADR 004 is resolved.
+
+## Pull-request consolidation
+
+PR #2 is the canonical foundation pull request. PR #1 should be closed as superseded after PR #2 passes current-head validation and merges; see [the consolidation note](docs/foundation-consolidation.md).

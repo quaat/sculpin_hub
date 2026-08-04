@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { closeDatabase, createDatabase, getDatabase } from "./index.js";
-afterEach(async () => closeDatabase());
+afterEach(() => closeDatabase());
 describe("database lifecycle", () => {
   it("runs a bounded lightweight readiness query", async () => {
     const database = createDatabase("postgresql://ignored/test", {
@@ -34,7 +34,7 @@ describe("database lifecycle", () => {
     vi.spyOn(database.pool, "end").mockResolvedValue(undefined);
     return database.close();
   });
-  it("rejects singleton reuse for a different connection target", async () => {
+  it("rejects singleton reuse for a different connection target", () => {
     const first = getDatabase("postgresql://ignored/one");
     expect(getDatabase("postgresql://ignored/one")).toBe(first);
     expect(() => getDatabase("postgresql://ignored/two")).toThrow(
