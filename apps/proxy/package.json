@@ -1,0 +1,26 @@
+{
+  "name": "@sculpin/proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "pnpm --workspace-root turbo build --filter=@sculpin/proxy^...",
+    "dev": "node --env-file=../../.env --import tsx --watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "lint": "eslint src",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sculpin/api-contracts": "workspace:*",
+    "@sculpin/config": "workspace:*",
+    "@sculpin/db": "workspace:*",
+    "@sculpin/observability": "workspace:*",
+    "fastify": "5.5.0",
+    "pino": "9.9.0"
+  },
+  "devDependencies": {
+    "tsx": "4.20.5"
+  }
+}

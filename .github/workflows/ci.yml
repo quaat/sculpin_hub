@@ -1,0 +1,48 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main, "codex/**"]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.28.1, run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: cp .env.example .env && pnpm env:smoke
+      - run: pnpm format:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+  integration-and-containers:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.28.1, run_install: false }
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: cp .env.example .env
+      - run: docker compose config --quiet
+      - run: docker compose up -d --wait postgres redis
+      - run: pnpm test:integration
+      - run: docker build -f apps/web/Dockerfile -t sculpin-hub-web .
+      - run: docker build -f apps/proxy/Dockerfile -t sculpin-hub-proxy .
+      - run: docker build -f apps/worker/Dockerfile -t sculpin-hub-worker .
+      - run: ./scripts/container-smoke.sh
+      - if: always()
+        run: docker compose down --volumes
