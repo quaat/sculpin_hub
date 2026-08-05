@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { closeDatabase, createDatabase, getDatabase } from "./index.js";
-const prismaClient = () => ({ $disconnect: vi.fn().mockResolvedValue(undefined) }) as never;
+const prismaClient = () =>
+  ({ $disconnect: vi.fn().mockResolvedValue(undefined) }) as never;
 afterEach(() => closeDatabase());
 describe("database lifecycle", () => {
   it("runs a bounded lightweight readiness query", async () => {
@@ -19,8 +20,26 @@ describe("database lifecycle", () => {
     vi.spyOn(database.pool, "end").mockResolvedValue(undefined);
     await database.close();
   });
+
+  it("uses an injectable Prisma client factory for readiness", async () => {
+    const client = prismaClient();
+    const factory = vi.fn().mockResolvedValue(client);
+    const database = createDatabase("postgresql://ignored/test", {
+      prismaClientFactory: factory,
+    });
+    vi.spyOn(database.pool, "query").mockResolvedValue({
+      rows: [{ ready: 1 }],
+    } as never);
+    vi.spyOn(database.pool, "end").mockResolvedValue(undefined);
+    await expect(database.ready()).resolves.toBe(true);
+    expect(factory).toHaveBeenCalledWith("postgresql://ignored/test");
+    expect(database.prisma).toBe(client);
+    await database.close();
+  });
   it("closes a pool at most once", async () => {
-    const database = createDatabase("postgresql://ignored/test", { prismaClient: prismaClient() });
+    const database = createDatabase("postgresql://ignored/test", {
+      prismaClient: prismaClient(),
+    });
     const end = vi.spyOn(database.pool, "end").mockResolvedValue(undefined);
     await Promise.all([database.close(), database.close()]);
     expect(end).toHaveBeenCalledOnce();
@@ -38,7 +57,9 @@ describe("database lifecycle", () => {
     return database.close();
   });
   it("rejects singleton reuse for a different connection target", () => {
-    const first = getDatabase("postgresql://ignored/one", { prismaClient: prismaClient() });
+    const first = getDatabase("postgresql://ignored/one", {
+      prismaClient: prismaClient(),
+    });
     expect(getDatabase("postgresql://ignored/one")).toBe(first);
     expect(() => getDatabase("postgresql://ignored/two")).toThrow(
       "different connection target",

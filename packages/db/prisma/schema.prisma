@@ -1,5 +1,6 @@
 generator client {
   provider = "prisma-client-js"
+  output   = "../generated/prisma"
 }
 
 datasource db {
@@ -54,6 +55,7 @@ model User {
   version            Int                      @default(1)
   externalIdentities ExternalIdentity[]
   memberships        OrganizationMembership[]
+  personalOrganizations Organization[] @relation("PersonalOrganizationOwner")
   auditEvents        AuditEvent[]
 
   @@index([normalizedEmail], map: "idx_users_normalized_email")
@@ -81,7 +83,9 @@ model ExternalIdentity {
 model Organization {
   id          String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   slug        String                   @unique @db.VarChar(63)
-  type        OrganizationType
+  type                OrganizationType
+  personalOwnerUserId String?                  @map("personal_owner_user_id") @db.Uuid
+  personalOwner       User?                    @relation("PersonalOrganizationOwner", fields: [personalOwnerUserId], references: [id], onDelete: Restrict)
   status      OrganizationStatus       @default(active)
   createdAt   DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -90,6 +94,7 @@ model Organization {
   auditEvents AuditEvent[]
   outboxEvents OutboxEvent[]
 
+  @@unique([personalOwnerUserId], map: "organizations_one_personal_owner_key")
   @@index([status], map: "idx_organizations_status")
   @@map("organizations")
 }

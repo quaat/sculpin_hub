@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "turbo build && turbo dev",
-    "build": "turbo build",
+    "build": "pnpm prisma:generate && turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "test": "turbo test",

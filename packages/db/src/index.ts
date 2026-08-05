@@ -1,3 +1,4 @@
+import { PrismaClient } from "../generated/prisma/index.js";
 import { Pool, type PoolConfig, type QueryConfig } from "pg";
 export {
   PostgresOutboxJobStore,
@@ -10,23 +11,22 @@ export {
   PostgresPersonalTenantTransaction,
 } from "./tenant.js";
 
-export interface PrismaClientLike {
-  $disconnect(): Promise<void>;
+export type PrismaClientLike = PrismaClient;
+
+export type PrismaClientFactory = (
+  connectionString: string,
+) => PrismaClientLike | Promise<PrismaClientLike>;
+
+function withPrismaConnectionLimit(connectionString: string): string {
+  const url = new URL(connectionString);
+  if (!url.searchParams.has("connection_limit"))
+    url.searchParams.set("connection_limit", "5");
+  return url.toString();
 }
 
-async function createPrismaClient(
-  connectionString: string,
-): Promise<PrismaClientLike> {
-  const loadPrisma = new Function("specifier", "return import(specifier)") as (
-    specifier: string,
-  ) => Promise<{
-    PrismaClient: new (options: {
-      datasources: { db: { url: string } };
-    }) => PrismaClientLike;
-  }>;
-  const prisma = await loadPrisma("@prisma/client");
-  return new prisma.PrismaClient({
-    datasources: { db: { url: connectionString } },
+function createPrismaClient(connectionString: string): PrismaClientLike {
+  return new PrismaClient({
+    datasources: { db: { url: withPrismaConnectionLimit(connectionString) } },
   });
 }
 
@@ -39,6 +39,7 @@ export interface Database {
 export interface DatabaseOptions extends Omit<PoolConfig, "connectionString"> {
   readinessTimeoutMs?: number;
   prismaClient?: PrismaClientLike;
+  prismaClientFactory?: PrismaClientFactory;
   onPoolError?: (error: Error) => void;
 }
 export function createDatabase(
@@ -48,6 +49,7 @@ export function createDatabase(
   const {
     readinessTimeoutMs = 2_000,
     prismaClient,
+    prismaClientFactory = createPrismaClient,
     onPoolError = () => undefined,
     max = 10,
     ...poolOptions
@@ -79,7 +81,7 @@ export function createDatabase(
       };
       prismaPromise ??= prisma
         ? Promise.resolve(prisma)
-        : createPrismaClient(connectionString);
+        : Promise.resolve(prismaClientFactory(connectionString));
       prisma = await prismaPromise;
       const result = await pool.query<{ ready: number }>(readinessQuery);
       return result.rows[0]?.ready === 1;
