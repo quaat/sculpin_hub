@@ -14,12 +14,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - uses: pnpm/action-setup@v4 # v4; pin after upstream SHA verification
+      - uses: pnpm/action-setup@0977fd915c017733fc7bd2ff85c7b35b1be48c99 # v6.0.10 immutable release; pnpm v10 requested explicitly
         with: { version: 10.28.1, run_install: false }
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with: { node-version-file: .nvmrc, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: cp .env.example .env && pnpm env:smoke
+      - run: pnpm prisma:format --check
+      - run: pnpm prisma:validate
+      - run: pnpm prisma:generate
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck
@@ -35,7 +38,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - uses: pnpm/action-setup@v4 # v4; pin after upstream SHA verification
+      - uses: pnpm/action-setup@0977fd915c017733fc7bd2ff85c7b35b1be48c99 # v6.0.10 immutable release; pnpm v10 requested explicitly
         with: { version: 10.28.1, run_install: false }
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with: { node-version-file: .nvmrc, cache: pnpm }
@@ -45,7 +48,7 @@ jobs:
       - run: docker compose config --quiet
       - run: docker compose up -d --wait postgres redis
       - run: pnpm db:migrate:deploy
-      - run: pnpm db:migrate:deploy
+      - run: pnpm db:migration:test
       - run: pnpm test:integration
       - run: docker build -f apps/web/Dockerfile -t sculpin-hub-web .
       - run: docker build -f apps/proxy/Dockerfile -t sculpin-hub-proxy .

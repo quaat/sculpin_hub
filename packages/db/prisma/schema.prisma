@@ -1,15 +1,156 @@
-generator client { provider = "prisma-client-js" }
-datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+generator client {
+  provider = "prisma-client-js"
+}
 
-// The versioned SQL migration is authoritative. Models intentionally map to its
-// snake_case names so generated access remains an infrastructure-only detail.
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  active
+  deactivated
+
+  @@map("user_status")
+}
+
+enum OrganizationType {
+  personal
+  team
+
+  @@map("organization_type")
+}
+
+enum OrganizationStatus {
+  active
+  suspended
+
+  @@map("organization_status")
+}
+
+enum MembershipRole {
+  owner
+  member
+
+  @@map("membership_role")
+}
+
+enum MembershipStatus {
+  active
+  inactive
+
+  @@map("membership_status")
+}
+
 model User {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  normalizedEmail String   @map("normalized_email")
-  displayName     String   @map("display_name")
-  locale          String
-  createdAt       DateTime @map("created_at") @db.Timestamptz
-  updatedAt       DateTime @map("updated_at") @db.Timestamptz
-  version         Int
+  id                 String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  normalizedEmail    String                   @map("normalized_email") @db.VarChar(254)
+  displayName        String                   @map("display_name") @db.VarChar(120)
+  status             UserStatus               @default(active)
+  locale             String                   @db.VarChar(16)
+  deactivatedAt      DateTime?                @map("deactivated_at") @db.Timestamptz(6)
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version            Int                      @default(1)
+  externalIdentities ExternalIdentity[]
+  memberships        OrganizationMembership[]
+  auditEvents        AuditEvent[]
+
+  @@index([normalizedEmail], map: "idx_users_normalized_email")
+  @@index([status], map: "idx_users_status")
   @@map("users")
+}
+
+model ExternalIdentity {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String   @map("user_id") @db.Uuid
+  provider         String   @db.VarChar(32)
+  providerSubject  String   @map("provider_subject") @db.VarChar(255)
+  providerEmail    String?  @map("provider_email") @db.VarChar(254)
+  emailVerified    Boolean  @default(false) @map("email_verified")
+  metadata         Json?    @map("safe_metadata")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  user             User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerSubject], map: "external_identities_provider_provider_subject_key")
+  @@index([userId], map: "idx_external_identities_user_id")
+  @@map("external_identities")
+}
+
+model Organization {
+  id          String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug        String                   @unique @db.VarChar(63)
+  type        OrganizationType
+  status      OrganizationStatus       @default(active)
+  createdAt   DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version     Int                      @default(1)
+  memberships OrganizationMembership[]
+  auditEvents AuditEvent[]
+  outboxEvents OutboxEvent[]
+
+  @@index([status], map: "idx_organizations_status")
+  @@map("organizations")
+}
+
+model OrganizationMembership {
+  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String             @map("organization_id") @db.Uuid
+  userId         String             @map("user_id") @db.Uuid
+  role           MembershipRole
+  status         MembershipStatus   @default(active)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user           User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  auditEvents    AuditEvent[]
+
+  @@unique([organizationId, userId], map: "organization_memberships_organization_id_user_id_key")
+  @@index([organizationId, status], map: "idx_memberships_organization_status")
+  @@index([userId, status], map: "idx_memberships_user_status")
+  @@map("organization_memberships")
+}
+
+model AuditEvent {
+  id             String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String                  @map("organization_id") @db.Uuid
+  actorUserId    String?                 @map("actor_user_id") @db.Uuid
+  systemActor    String?                 @map("system_actor") @db.VarChar(64)
+  action         String                  @db.VarChar(120)
+  targetType     String                  @map("target_type") @db.VarChar(64)
+  targetId       String                  @map("target_id") @db.Uuid
+  beforeSummary  Json?                   @map("before_summary")
+  afterSummary   Json?                   @map("after_summary")
+  requestId      String                  @map("request_id") @db.VarChar(128)
+  occurredAt     DateTime                @map("occurred_at") @db.Timestamptz(6)
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  actorUser      User?                   @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+  actorMembership OrganizationMembership? @relation(fields: [organizationId, actorUserId], references: [organizationId, userId], onDelete: Restrict)
+
+  @@index([organizationId, occurredAt], map: "idx_audit_events_org_occurred")
+  @@map("audit_events")
+}
+
+model OutboxEvent {
+  id                String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId    String?       @map("organization_id") @db.Uuid
+  aggregateType     String        @map("aggregate_type") @db.VarChar(64)
+  aggregateId       String        @map("aggregate_id") @db.Uuid
+  eventType         String        @map("event_type") @db.VarChar(120)
+  schemaVersion     Int           @map("schema_version")
+  payload           Json
+  occurredAt        DateTime      @map("occurred_at") @db.Timestamptz(6)
+  availableAt       DateTime      @map("available_at") @db.Timestamptz(6)
+  claimOwner        String?       @map("claim_owner") @db.VarChar(128)
+  claimedUntil      DateTime?     @map("claimed_until") @db.Timestamptz(6)
+  attemptCount      Int           @default(0) @map("attempt_count")
+  maxAttempts       Int           @default(10) @map("max_attempts")
+  processedAt       DateTime?     @map("processed_at") @db.Timestamptz(6)
+  terminalErrorCode String?       @map("terminal_error_code") @db.VarChar(80)
+  version           Int           @default(1)
+  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, aggregateType, aggregateId], map: "idx_outbox_events_org_aggregate")
+  @@map("outbox_events")
 }

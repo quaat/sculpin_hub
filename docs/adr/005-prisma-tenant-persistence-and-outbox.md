@@ -1,32 +1,23 @@
-# ADR 005: Prisma tenant persistence and transactional outbox
+# ADR 005: Prisma tenant persistence, audit, and transactional outbox
 
-- Status: Accepted
-- Date: 2026-08-04
+## Status
 
-## Context
-
-The first domain data must establish tenant isolation and reliable side effects before authentication or public routes are enabled. The existing `pg` pool remains useful for bounded health checks and for SQL whose concurrency semantics must be directly reviewable.
+Accepted.
 
 ## Decision
 
-Prisma's schema and generated client are introduced as the intended typed persistence client. Versioned, forward-only SQL migrations are authoritative and are deployed separately from application startup. A single process-owned database lifecycle is required; callers must not create untracked Prisma or `pg` pools. During this transition the existing pool owns readiness, transactions, and the outbox. Prisma must use that same database target and must not become a second long-lived application pool until the health seam is consolidated.
+Prisma ORM is introduced now because the repository has reached the first durable domain migration: users, external identities, organizations, memberships, audit events, and outbox events. Prisma Migrate is the single migration authority; reviewed SQL lives under `packages/db/prisma/migrations`, deployment uses `prisma migrate deploy`, and `_prisma_migrations` is the only migration history table. Raw SQL remains only for PostgreSQL features that Prisma cannot express or should not hide: check-heavy invariants, append-only audit triggers, partial claim indexes, and `FOR UPDATE SKIP LOCKED` outbox claiming.
 
-PostgreSQL generates UUIDs with `gen_random_uuid()`. This keeps IDs available within a transaction without trusting an application host's clock or random source.
+`packages/db` owns persistence lifecycle. Applications receive a `Database` object from `createDatabase`/`getDatabase`; they must not create ad-hoc Prisma clients or pg pools. The lifecycle explicitly owns one bounded pg pool for readiness and transactional SQL plus one Prisma client for generated schema access, and `close()` is idempotent. This intentionally spends two bounded connection budgets until a supported shared Prisma PostgreSQL adapter is adopted and tested.
 
-Tenant-owned repository operations require a `TenantContext` and always begin predicates and relevant indexes with `organization_id`. Global identity lookup is a separate repository. Application-enforced tenant repositories remain mandatory even if row-level security is later added. RLS is deferred until connection/session scoping and operational recovery procedures are designed and tested.
+UUIDs are generated in PostgreSQL with `gen_random_uuid()`. This deviates from the implementation plan's longer-term preference for time-sortable UUIDs because PostgreSQL 17 does not provide a standard UUIDv7 generator without an additional extension; migration safety and portability take precedence for this baseline.
 
-Personal-organization creation, membership, audit, and outbox insertion occur in one database transaction. Audit events are append-only and reject updates and deletes at the database boundary. Summaries and outbox payloads are minimal and must not contain credentials, raw identity claims, provider tokens, or request bodies.
+Tenant-owned repositories require `TenantContext` as their first argument. Global identity lookup by `(provider, providerSubject)` is isolated in a separate identity repository and does not weaken tenant repository contracts. Application-enforced tenant repositories are mandatory even if PostgreSQL RLS is added later. RLS is explicitly deferred until the tenancy model and service-role requirements are proven by more domain branches.
 
-Outbox consumers claim bounded batches with `FOR UPDATE SKIP LOCKED`. A claim records its owner, increments attempts atomically, and expires after a lease. Only the owning worker may complete it. Processed and terminal events cannot be reclaimed; retryable outcomes clear ownership and set a future availability time. Event payloads are validated before dispatch.
+Audit events are append-only. UPDATE and DELETE are rejected by triggers, summaries must be JSON objects or null, and user actors must be members of the organization through a composite foreign key. System actors remain supported for future maintenance jobs.
 
-Users, organizations, and memberships use restrictive foreign keys. Audit and outbox history never cascade-delete. Domain records are deactivated rather than physically removed. Audit retention is indefinite pending a compliance policy; processed outbox events may be archived only through a separately reviewed retention job.
+Outbox events use an event schema registry keyed by `eventType` and `schemaVersion`. The initial event is `personal_organization.created` version 1 and contains only opaque `organizationId` and `userId` values. Payloads are checked for exact shape and nested secret-like keys before insertion and again at claim time. Invalid stored payloads are terminalized inside the claim transaction so poison rows do not strand valid events in the same batch.
 
-## Migrations, testing, and rollback
+Claims use the database clock (`now()`) for eligibility and lease comparisons. Claiming locks an ordered bounded batch with `FOR UPDATE SKIP LOCKED`, validates payloads while the rows are locked, terminalizes poison rows, and atomically records owner, lease, attempt count, and version for valid rows. Retryable completion clears the claim and schedules a future availability time; if attempts are exhausted, the event becomes terminal with `attempts_exhausted`. Completion returns explicit internal statuses, wrong-owner completion fails, and already-settled rows are treated as explicit idempotent outcomes.
 
-CI applies migrations to an empty real PostgreSQL database, reapplies them to prove idempotence, validates the schema/client, runs constraint and tenant-isolation tests, and exercises concurrent claims. Production migrations run as an explicit deployment step, never on workload startup.
-
-Schema rollback uses a forward corrective migration and application rollback. Destructive down migrations are not automated because they risk erasing audit history. Releases must remain compatible with the preceding schema during rollout.
-
-## Consequences
-
-Infrastructure SQL remains visible where transactional or leasing behavior matters, while application workloads cannot issue arbitrary persistence queries. Authentication, OAuth callbacks, sessions, and all Sculpin production routes remain out of scope.
+Deletion is deferred. Foreign keys use `ON DELETE RESTRICT`; audit and outbox retention will be implemented as explicit archival policies rather than cascades. Rollback strategy is forward-only: repair bad schema with a new reviewed migration rather than editing an applied migration.

@@ -1,16 +1,38 @@
-import type {
-  CreatePersonalTenantCommand,
-  PersonalTenantResult,
-  PersonalTenantTransaction,
-  TenantContext,
+import {
+  DomainConflictError,
+  validateCreatePersonalTenantCommand,
+  type CreatePersonalTenantCommand,
+  type IdentityRepository,
+  type PersonalTenantResult,
+  type PersonalTenantTransaction,
+  type TenantContext,
 } from "@sculpin/domain";
 import type { Pool } from "pg";
+import { validateOutboxPayload } from "./outbox.js";
 
-export class PostgresPersonalTenantTransaction implements PersonalTenantTransaction {
+function mapPostgresConflict(error: unknown): never {
+  const pgError = error as { code?: string; constraint?: string };
+  if (
+    pgError.code === "23505" &&
+    pgError.constraint === "external_identities_provider_provider_subject_key"
+  )
+    throw new DomainConflictError("identity_conflict");
+  if (
+    pgError.code === "23505" &&
+    pgError.constraint === "organizations_slug_key"
+  )
+    throw new DomainConflictError("organization_slug_conflict");
+  throw error;
+}
+
+export class PostgresPersonalTenantTransaction
+  implements PersonalTenantTransaction
+{
   constructor(private readonly pool: Pool) {}
   async create(
     command: CreatePersonalTenantCommand,
   ): Promise<PersonalTenantResult> {
+    validateCreatePersonalTenantCommand(command);
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -22,14 +44,14 @@ export class PostgresPersonalTenantTransaction implements PersonalTenantTransact
       if (!userId) throw new Error("user_insert_failed");
       if (command.identity)
         await client.query(
-          "INSERT INTO external_identities (user_id, provider, provider_subject, provider_email, email_verified, claims) VALUES ($1,$2,$3,$4,$5,$6)",
+          "INSERT INTO external_identities (user_id, provider, provider_subject, provider_email, email_verified, safe_metadata) VALUES ($1,$2,$3,$4,$5,$6)",
           [
             userId,
             command.identity.provider,
             command.identity.providerSubject,
-            command.identity.providerEmail ?? null,
+            command.identity.providerEmail?.toLowerCase() ?? null,
             command.identity.emailVerified,
-            command.identity.claims ?? {},
+            command.identity.metadata ?? null,
           ],
         );
       const organization = await client.query<{ id: string }>(
@@ -46,15 +68,24 @@ export class PostgresPersonalTenantTransaction implements PersonalTenantTransact
         "INSERT INTO audit_events (organization_id, actor_user_id, action, target_type, target_id, after_summary, request_id, occurred_at) VALUES ($1,$2,'personal_organization.created','organization',$1,$3,$4,now())",
         [organizationId, userId, { type: "personal" }, command.requestId],
       );
+      const payload = { organizationId, userId };
+      validateOutboxPayload("personal_organization.created", 1, payload);
       await client.query(
         "INSERT INTO outbox_events (organization_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, available_at) VALUES ($1,'organization',$1,'personal_organization.created',1,$2,now(),now())",
-        [organizationId, { organizationId, userId }],
+        [organizationId, payload],
       );
       await client.query("COMMIT");
       return { userId, organizationId };
     } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          "personal tenant transaction rollback failed",
+        );
+      }
+      mapPostgresConflict(error);
     } finally {
       client.release();
     }
@@ -87,5 +118,19 @@ export class PostgresMembershipRepository {
       [context.organizationId, userId],
     );
     return result.rows[0];
+  }
+}
+
+export class PostgresIdentityRepository implements IdentityRepository {
+  constructor(private readonly pool: Pool) {}
+  async findUserId(
+    provider: string,
+    providerSubject: string,
+  ): Promise<string | undefined> {
+    const result = await this.pool.query<{ userId: string }>(
+      'SELECT user_id AS "userId" FROM external_identities WHERE provider=$1 AND provider_subject=$2',
+      [provider, providerSubject],
+    );
+    return result.rows[0]?.userId;
   }
 }

@@ -17,9 +17,15 @@ importers:
       eslint:
         specifier: 9.33.0
         version: 9.33.0
+      pg:
+        specifier: 8.16.3
+        version: 8.16.3
       prettier:
         specifier: 3.6.2
         version: 3.6.2
+      prisma:
+        specifier: 6.19.3
+        version: 6.19.3(typescript@5.9.2)
       tsx:
         specifier: 4.20.5
         version: 4.20.5
@@ -131,6 +137,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@prisma/client':
+        specifier: 6.19.3
+        version: 6.19.3(prisma@6.19.3(typescript@5.9.2))(typescript@5.9.2)
       '@sculpin/domain':
         specifier: workspace:*
         version: link:../domain

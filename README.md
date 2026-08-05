@@ -92,3 +92,31 @@ The production Sculpin route registry remains empty. `/v1`, `/v1/`, and every un
 - [Architecture decisions](docs/adr/)
 
 The recommended next focused pull request is the first meaningful PostgreSQL domain baseline: users, external identities, personal organizations, memberships, audit events, and transactional outbox—without enabling OAuth until ADR 004 is resolved.
+
+## Tenant persistence baseline
+
+Prisma is generated and validated from `packages/db/prisma/schema.prisma`:
+
+```bash
+pnpm prisma:format --check
+pnpm prisma:validate
+pnpm prisma:generate
+```
+
+Prisma Migrate is the single migration authority. Apply reviewed SQL migrations to a local PostgreSQL database with:
+
+```bash
+DATABASE_URL=postgresql://sculpin:password@127.0.0.1:5432/sculpin_hub pnpm db:migrate:deploy
+```
+
+Migration tests require PostgreSQL access through `DATABASE_URL`; they create a fresh temporary database, deploy migrations twice, and run the Prisma drift check:
+
+```bash
+DATABASE_URL=postgresql://sculpin:password@127.0.0.1:5432/sculpin_hub pnpm db:migration:test
+```
+
+The persistence branch intentionally keeps authentication, OAuth callbacks, sessions, products, plans, subscriptions, API tokens, accounting, billing, Sculpin forwarding, public control APIs, Redis enforcement, admin bootstrap, and Azure infrastructure disabled. Production proxy routes remain unregistered until a later reviewed branch enables them.
+
+### ESLint framework rules
+
+The repository currently uses flat ESLint with strict TypeScript rules across the monorepo. The Next.js recommended plugin is not enabled in this branch because no user-facing Next.js behavior changes here; adding the plugin is intentionally deferred to a web-focused branch so framework-specific rule changes can be reviewed separately from persistence semantics.
