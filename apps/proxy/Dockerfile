@@ -3,7 +3,7 @@ ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN corepack enable && corepack prepare pnpm@10.28.1 --activate
 WORKDIR /app
 COPY . .
-RUN pnpm install --frozen-lockfile && pnpm prisma:generate && pnpm --filter @sculpin/proxy... build && pnpm --filter @sculpin/proxy deploy --prod --legacy /out
+RUN pnpm install --frozen-lockfile && DATABASE_URL=postgresql://build:build@localhost:5432/build pnpm prisma:generate && pnpm --filter @sculpin/proxy... build && pnpm --filter @sculpin/proxy deploy --prod --legacy /out
 FROM node:22.22.2-alpine AS runtime
 ENV NODE_ENV=production PROXY_HOST=0.0.0.0
 RUN addgroup -S app && adduser -S app -G app

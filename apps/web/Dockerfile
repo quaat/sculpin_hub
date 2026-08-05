@@ -20,7 +20,7 @@ COPY packages/db packages/db
 COPY packages/domain packages/domain
 COPY packages/jobs packages/jobs
 COPY packages/observability packages/observability
-RUN pnpm prisma:generate && pnpm --filter @sculpin/web... build
+RUN DATABASE_URL=postgresql://build:build@localhost:5432/build pnpm prisma:generate && pnpm --filter @sculpin/web... build
 FROM node:22.22.2-alpine AS runtime
 ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000
 RUN addgroup -S app && adduser -S app -G app

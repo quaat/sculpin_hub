@@ -15,18 +15,34 @@ export type PrismaClientLike = PrismaClient;
 
 export type PrismaClientFactory = (
   connectionString: string,
+  readinessTimeoutMs: number,
 ) => PrismaClientLike | Promise<PrismaClientLike>;
 
-function withPrismaConnectionLimit(connectionString: string): string {
+function withPrismaConnectionOptions(
+  connectionString: string,
+  readinessTimeoutMs: number,
+): string {
   const url = new URL(connectionString);
   if (!url.searchParams.has("connection_limit"))
     url.searchParams.set("connection_limit", "5");
+  if (!url.searchParams.has("connect_timeout"))
+    url.searchParams.set(
+      "connect_timeout",
+      String(Math.max(1, Math.ceil(readinessTimeoutMs / 1_000))),
+    );
   return url.toString();
 }
 
-function createPrismaClient(connectionString: string): PrismaClientLike {
+function createPrismaClient(
+  connectionString: string,
+  readinessTimeoutMs: number,
+): PrismaClientLike {
   return new PrismaClient({
-    datasources: { db: { url: withPrismaConnectionLimit(connectionString) } },
+    datasources: {
+      db: {
+        url: withPrismaConnectionOptions(connectionString, readinessTimeoutMs),
+      },
+    },
   });
 }
 
@@ -63,6 +79,7 @@ export function createDatabase(
   });
   let prisma = prismaClient;
   let prismaPromise: Promise<PrismaClientLike> | undefined;
+  let prismaConnectPromise: Promise<void> | undefined;
   pool.on("error", (error) => onPoolError(error));
   let closePromise: Promise<void> | undefined;
   return {
@@ -81,18 +98,26 @@ export function createDatabase(
       };
       prismaPromise ??= prisma
         ? Promise.resolve(prisma)
-        : Promise.resolve(prismaClientFactory(connectionString));
+        : Promise.resolve(
+            prismaClientFactory(connectionString, readinessTimeoutMs),
+          );
       prisma = await prismaPromise;
-      await prisma.$connect();
+      prismaConnectPromise ??= prisma.$connect().catch((error: unknown) => {
+        prismaConnectPromise = undefined;
+        throw error;
+      });
+      await prismaConnectPromise;
       const result = await pool.query<{ ready: number }>(readinessQuery);
       return result.rows[0]?.ready === 1;
     },
     close() {
       closePromise ??= Promise.all([
         pool.end(),
-        prismaPromise?.then((client) => client.$disconnect()) ??
-          prisma?.$disconnect() ??
-          Promise.resolve(),
+        (prismaPromise ?? (prisma ? Promise.resolve(prisma) : undefined))
+          ?.then(async (client) => {
+            await prismaConnectPromise?.catch(() => undefined);
+            await client.$disconnect();
+          }) ?? Promise.resolve(),
       ]).then(() => undefined);
       return closePromise;
     },

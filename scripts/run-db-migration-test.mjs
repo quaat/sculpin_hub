@@ -131,6 +131,14 @@ try {
     );
     await expectSqlFailure(
       test,
+      "INSERT INTO outbox_events (organization_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, available_at) VALUES ('00000000-0000-4000-8000-000000000101','organization','00000000-0000-4000-8000-000000000101','personal_organization.created',2,'{\"organizationId\":\"00000000-0000-4000-8000-000000000101\",\"userId\":\"00000000-0000-4000-8000-000000000001\"}'::jsonb,now(),now())",
+      { code: "P0001", message: /shape mismatch/ },
+    );
+    await test.query(
+      "INSERT INTO outbox_events (organization_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, available_at) VALUES ('00000000-0000-4000-8000-000000000101','organization','00000000-0000-4000-8000-000000000101','unrelated.event',1,'{}'::jsonb,now(),now())",
+    );
+    await expectSqlFailure(
+      test,
       "INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, available_at, claim_owner) VALUES ('organization','00000000-0000-4000-8000-000000000201','x.y',2,'{}',now(),now(),'worker')",
       { code: "23514" },
     );

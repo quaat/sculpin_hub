@@ -131,8 +131,8 @@ CREATE INDEX idx_outbox_events_expired_claim ON outbox_events (claimed_until, id
 
 CREATE FUNCTION enforce_personal_organization_outbox() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF NEW.event_type = 'personal_organization.created' OR NEW.schema_version = 1 THEN
-    IF NEW.event_type <> 'personal_organization.created' OR NEW.schema_version <> 1 THEN
+  IF NEW.event_type = 'personal_organization.created' THEN
+    IF NEW.schema_version <> 1 THEN
       RAISE EXCEPTION 'personal organization outbox event shape mismatch';
     END IF;
     IF NEW.organization_id IS NULL OR NEW.aggregate_type <> 'organization' OR NEW.aggregate_id <> NEW.organization_id THEN

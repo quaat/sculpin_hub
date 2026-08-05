@@ -29,10 +29,11 @@ describe("database lifecycle", () => {
     await database.close();
   });
 
-  it("creates Prisma once and reuses it across repeated readiness checks", async () => {
+  it("creates and connects Prisma once across repeated readiness checks", async () => {
     const client = prismaClient();
     const factory = vi.fn().mockResolvedValue(client);
     const database = createDatabase("postgresql://ignored/test", {
+      readinessTimeoutMs: 2_500,
       prismaClientFactory: factory,
     });
     vi.spyOn(database.pool, "query").mockResolvedValue({
@@ -42,23 +43,45 @@ describe("database lifecycle", () => {
     await expect(database.ready()).resolves.toBe(true);
     await expect(database.ready()).resolves.toBe(true);
     expect(factory).toHaveBeenCalledOnce();
-    expect(client.$connect).toHaveBeenCalledTimes(2);
+    expect(factory).toHaveBeenCalledWith("postgresql://ignored/test", 2_500);
+    expect(client.$connect).toHaveBeenCalledOnce();
     expect(database.prisma).toBe(client);
     await database.close();
   });
 
-  it("fails readiness safely when Prisma connection fails", async () => {
+  it("shares one Prisma connection across concurrent readiness checks", async () => {
     const client = prismaClient();
-    vi.mocked(client.$connect).mockRejectedValueOnce(
-      new Error("connect failed"),
-    );
+    const factory = vi.fn().mockResolvedValue(client);
+    const database = createDatabase("postgresql://ignored/test", {
+      prismaClientFactory: factory,
+    });
+    vi.spyOn(database.pool, "query").mockResolvedValue({
+      rows: [{ ready: 1 }],
+    } as never);
+    vi.spyOn(database.pool, "end").mockResolvedValue(undefined);
+    await expect(
+      Promise.all([database.ready(), database.ready()]),
+    ).resolves.toEqual([true, true]);
+    expect(factory).toHaveBeenCalledOnce();
+    expect(client.$connect).toHaveBeenCalledOnce();
+    await database.close();
+  });
+
+  it("retries Prisma connection after an initial connection failure", async () => {
+    const client = prismaClient();
+    vi.mocked(client.$connect)
+      .mockRejectedValueOnce(new Error("connect failed"))
+      .mockResolvedValueOnce(undefined);
     const database = createDatabase("postgresql://ignored/test", {
       prismaClient: client,
     });
-    const query = vi.spyOn(database.pool, "query");
+    vi.spyOn(database.pool, "query").mockResolvedValue({
+      rows: [{ ready: 1 }],
+    } as never);
     vi.spyOn(database.pool, "end").mockResolvedValue(undefined);
     await expect(database.ready()).rejects.toThrow("connect failed");
-    expect(query).not.toHaveBeenCalled();
+    await expect(database.ready()).resolves.toBe(true);
+    expect(client.$connect).toHaveBeenCalledTimes(2);
     await database.close();
   });
 
@@ -106,6 +129,7 @@ describe("database lifecycle", () => {
     await expect(ready).resolves.toBe(true);
     await closed;
     expect(factory).toHaveBeenCalledOnce();
+    expect(client.$connect).toHaveBeenCalledOnce();
     expect(end).toHaveBeenCalledOnce();
     expect(client.$disconnect).toHaveBeenCalledOnce();
   });

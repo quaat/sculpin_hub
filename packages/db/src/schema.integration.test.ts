@@ -139,6 +139,48 @@ suite("schema invariants", () => {
     );
   });
 
+
+  it("scopes the personal organization outbox trigger to the personal event type", async () => {
+    const user = uuid(104);
+    const org = uuid(204);
+    await client.query(
+      "INSERT INTO users (id, normalized_email, display_name, locale) VALUES ($1,'schema-outbox-owner@example.com','Outbox','en')",
+      [user],
+    );
+    await client.query(
+      "INSERT INTO organizations (id, slug, type, personal_owner_user_id) VALUES ($1,'schema-outbox-personal','personal',$2)",
+      [org, user],
+    );
+    await client.query(
+      "INSERT INTO organization_memberships (organization_id, user_id, role) VALUES ($1,$2,'owner')",
+      [org, user],
+    );
+    await client.query(
+      "INSERT INTO outbox_events (organization_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, available_at) VALUES ($1,'organization',$1,'personal_organization.created',1,$2,now(),now())",
+      [org, { organizationId: org, userId: user }],
+    );
+    await expectPgError(
+      () =>
+        client.query(
+          "INSERT INTO outbox_events (organization_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, available_at) VALUES ($1,'organization',$1,'personal_organization.created',2,$2,now(),now())",
+          [org, { organizationId: org, userId: user }],
+        ),
+      { code: "P0001", message: /shape mismatch/ },
+    );
+    await expectPgError(
+      () =>
+        client.query(
+          "INSERT INTO outbox_events (organization_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, available_at) VALUES ($1,'organization',$1,'personal_organization.created',1,'{}'::jsonb,now(),now())",
+          [org],
+        ),
+      { code: "P0001", message: /payload invalid/ },
+    );
+    await client.query(
+      "INSERT INTO outbox_events (organization_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, available_at) VALUES ($1,'organization',$1,'unrelated.event',1,'{}'::jsonb,now(),now())",
+      [org],
+    );
+  });
+
   it("enforces outbox state constraints and indexes", async () => {
     const indexes = await client.query<{ indexname: string }>(
       "SELECT indexname FROM pg_indexes WHERE tablename='outbox_events'",

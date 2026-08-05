@@ -184,6 +184,33 @@ suite("outbox concurrency", () => {
         },
       ),
     ).resolves.toBe("terminal");
+    const settled = await pool.query<{ version: number; terminalErrorCode: string }>(
+      'SELECT version, terminal_error_code AS "terminalErrorCode" FROM outbox_events WHERE id=$1',
+      [id],
+    );
+    expect(settled.rows[0]).toMatchObject({
+      version: 3,
+      terminalErrorCode: "attempts_exhausted",
+    });
+    await expect(
+      new PostgresOutboxJobStore(pool).completeWithStatus(
+        id,
+        "terminal-owner",
+        {
+          outcome: "retryable_failure",
+          reasonCode: "retry",
+          retryAt: new Date(Date.now() + 60_000),
+        },
+      ),
+    ).resolves.toBe("already_settled");
+    const repeated = await pool.query<{ version: number; terminalErrorCode: string }>(
+      'SELECT version, terminal_error_code AS "terminalErrorCode" FROM outbox_events WHERE id=$1',
+      [id],
+    );
+    expect(repeated.rows[0]).toMatchObject({
+      version: 3,
+      terminalErrorCode: "attempts_exhausted",
+    });
     await expect(
       new PostgresOutboxJobStore(pool).completeWithStatus(
         id,

@@ -229,6 +229,13 @@ export class PostgresOutboxJobStore implements JobStore {
           await client.query("COMMIT");
           return "already_settled";
         }
+        if (
+          result.outcome === "retryable_failure" &&
+          row.terminalErrorCode === "attempts_exhausted"
+        ) {
+          await client.query("COMMIT");
+          return "already_settled";
+        }
         throw new OutboxTransitionError("illegal_state");
       }
       if (row.claimOwner !== workerId)
