@@ -16,7 +16,7 @@ Tenant-owned repositories require `TenantContext` as their first argument. Globa
 
 External identity `safe_metadata` is constrained at the database boundary to the version-1 allow-list (`schemaVersion`, `issuer`, and `tenant`) and rejects unknown, nested, or credential-like keys.
 
-Personal organizations store `personal_owner_user_id` on the organization row. A partial unique index on that column for `type = 'personal'` guarantees one personal organization per user while ordinary membership rows still allow future team memberships.
+Personal organizations store `personal_owner_user_id` on the organization row. A normal named unique constraint on that nullable column (`organizations_personal_owner_user_id_key`) guarantees one personal organization per user because PostgreSQL permits multiple `NULL` team owners while rejecting duplicate non-null personal owners; ordinary membership rows still allow future team memberships.
 
 Audit events are append-only. UPDATE and DELETE are rejected by triggers, summaries must be JSON objects or null, and user actors must be members of the organization through a composite foreign key. System actors remain supported for future maintenance jobs.
 

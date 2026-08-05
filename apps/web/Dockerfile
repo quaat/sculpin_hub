@@ -11,9 +11,8 @@ COPY packages/db/package.json packages/db/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/jobs/package.json packages/jobs/package.json
 COPY packages/observability/package.json packages/observability/package.json
-RUN pnpm install --frozen-lockfile
 COPY packages/db/prisma/schema.prisma packages/db/prisma/schema.prisma
-RUN pnpm prisma:generate
+RUN pnpm install --frozen-lockfile
 COPY apps/web apps/web
 COPY packages/api-contracts packages/api-contracts
 COPY packages/config packages/config

@@ -109,7 +109,7 @@ Prisma Migrate is the single migration authority. Apply reviewed SQL migrations 
 DATABASE_URL=postgresql://sculpin:password@127.0.0.1:5432/sculpin_hub pnpm db:migrate:deploy
 ```
 
-Migration tests require PostgreSQL access through `DATABASE_URL`; they create a fresh temporary database, deploy migrations twice, check Prisma migration status, validate and generate the Prisma Client, run the Prisma-supported drift check with a shadow database, and directly exercise custom PostgreSQL triggers, checks, foreign keys, and partial-index-backed invariants that Prisma diff does not inspect:
+Migration tests require PostgreSQL access through `DATABASE_URL`; they create a fresh temporary database, deploy migrations twice, check Prisma migration status, validate and generate the Prisma Client, run the Prisma-supported drift check with a shadow database, and directly exercise custom PostgreSQL triggers, checks, foreign keys, and index-backed invariants that Prisma diff does not inspect:
 
 ```bash
 DATABASE_URL=postgresql://sculpin:password@127.0.0.1:5432/sculpin_hub pnpm db:migration:test

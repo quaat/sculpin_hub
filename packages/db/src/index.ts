@@ -83,6 +83,7 @@ export function createDatabase(
         ? Promise.resolve(prisma)
         : Promise.resolve(prismaClientFactory(connectionString));
       prisma = await prismaPromise;
+      await prisma.$connect();
       const result = await pool.query<{ ready: number }>(readinessQuery);
       return result.rows[0]?.ready === 1;
     },

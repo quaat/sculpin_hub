@@ -8,3 +8,5 @@ coverage/
 !.env.example
 .DS_Store
 *.log
+
+packages/db/generated/prisma/

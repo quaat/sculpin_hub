@@ -26,6 +26,7 @@ CREATE FUNCTION is_safe_external_identity_metadata(value jsonb) RETURNS boolean 
     jsonb_typeof(value) = 'object'
     AND (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(value) AS key) <@ ARRAY['issuer','schemaVersion','tenant']
     AND value ? 'schemaVersion'
+    AND jsonb_typeof(value->'schemaVersion') = 'number'
     AND value->>'schemaVersion' = '1'
     AND NOT (value ?| ARRAY['authorization','cookie','token','secret','password','passphrase','apikey','clientsecret','databaseurl','connectionstring','credential','session'])
     AND (NOT value ? 'issuer' OR (jsonb_typeof(value->'issuer') = 'string' AND length(value->>'issuer') BETWEEN 1 AND 120))
@@ -58,7 +59,7 @@ CREATE TABLE organizations (
   version integer NOT NULL DEFAULT 1 CHECK (version >= 1),
   CHECK ((type = 'personal') = (personal_owner_user_id IS NOT NULL))
 );
-CREATE UNIQUE INDEX organizations_one_personal_owner_key ON organizations (personal_owner_user_id) WHERE type = 'personal';
+ALTER TABLE organizations ADD CONSTRAINT organizations_personal_owner_user_id_key UNIQUE (personal_owner_user_id);
 CREATE INDEX idx_organizations_status ON organizations (status);
 
 CREATE TABLE organization_memberships (
