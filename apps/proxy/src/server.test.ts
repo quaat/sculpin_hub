@@ -25,6 +25,7 @@ const config: ProxyConfig = {
 function database(ready = true): Database {
   return {
     pool: {} as never,
+    prisma: {} as never,
     ready: vi.fn().mockResolvedValue(ready),
     close: vi.fn().mockResolvedValue(undefined),
   };

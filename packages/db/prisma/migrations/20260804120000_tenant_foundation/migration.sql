@@ -21,6 +21,19 @@ CREATE TABLE users (
 CREATE INDEX idx_users_normalized_email ON users (normalized_email);
 CREATE INDEX idx_users_status ON users (status);
 
+CREATE FUNCTION is_safe_external_identity_metadata(value jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT value IS NULL OR (
+    jsonb_typeof(value) = 'object'
+    AND (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(value) AS key) <@ ARRAY['issuer','schemaVersion','tenant']
+    AND value ? 'schemaVersion'
+    AND jsonb_typeof(value->'schemaVersion') = 'number'
+    AND value->>'schemaVersion' = '1'
+    AND NOT (value ?| ARRAY['authorization','cookie','token','secret','password','passphrase','apikey','clientsecret','databaseurl','connectionstring','credential','session'])
+    AND (NOT value ? 'issuer' OR (jsonb_typeof(value->'issuer') = 'string' AND length(value->>'issuer') BETWEEN 1 AND 120))
+    AND (NOT value ? 'tenant' OR (jsonb_typeof(value->'tenant') = 'string' AND length(value->>'tenant') BETWEEN 1 AND 120))
+  );
+$$;
+
 CREATE TABLE external_identities (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -28,7 +41,7 @@ CREATE TABLE external_identities (
   provider_subject varchar(255) NOT NULL CHECK (provider_subject !~ '[[:cntrl:]]' AND btrim(provider_subject) <> ''),
   provider_email varchar(254) CHECK (provider_email IS NULL OR lower(provider_email) ~ '^[a-z0-9.!#$%&''*+/=?^_`{|}~-]+@[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'),
   email_verified boolean NOT NULL DEFAULT false,
-  safe_metadata jsonb CHECK (safe_metadata IS NULL OR (jsonb_typeof(safe_metadata) = 'object' AND safe_metadata->>'schemaVersion' = '1')),
+  safe_metadata jsonb CHECK (is_safe_external_identity_metadata(safe_metadata)),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(provider, provider_subject)
@@ -39,11 +52,14 @@ CREATE TABLE organizations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   slug varchar(63) NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'),
   type organization_type NOT NULL,
+  personal_owner_user_id uuid REFERENCES users(id) ON DELETE RESTRICT,
   status organization_status NOT NULL DEFAULT 'active',
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  version integer NOT NULL DEFAULT 1 CHECK (version >= 1)
+  version integer NOT NULL DEFAULT 1 CHECK (version >= 1),
+  CHECK ((type = 'personal') = (personal_owner_user_id IS NOT NULL))
 );
+ALTER TABLE organizations ADD CONSTRAINT organizations_personal_owner_user_id_key UNIQUE (personal_owner_user_id);
 CREATE INDEX idx_organizations_status ON organizations (status);
 
 CREATE TABLE organization_memberships (
@@ -112,3 +128,35 @@ CREATE TABLE outbox_events (
 CREATE INDEX idx_outbox_events_org_aggregate ON outbox_events (organization_id, aggregate_type, aggregate_id);
 CREATE INDEX idx_outbox_events_pending_claim ON outbox_events (available_at, id) WHERE processed_at IS NULL AND terminal_error_code IS NULL;
 CREATE INDEX idx_outbox_events_expired_claim ON outbox_events (claimed_until, id) WHERE processed_at IS NULL AND terminal_error_code IS NULL AND claimed_until IS NOT NULL;
+
+CREATE FUNCTION enforce_personal_organization_outbox() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.event_type = 'personal_organization.created' THEN
+    IF NEW.schema_version <> 1 THEN
+      RAISE EXCEPTION 'personal organization outbox event shape mismatch';
+    END IF;
+    IF NEW.organization_id IS NULL OR NEW.aggregate_type <> 'organization' OR NEW.aggregate_id <> NEW.organization_id THEN
+      RAISE EXCEPTION 'personal organization outbox aggregate mismatch';
+    END IF;
+    IF jsonb_typeof(NEW.payload) <> 'object'
+       OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(NEW.payload) AS key) <> ARRAY['organizationId','userId']
+       OR NEW.payload->>'organizationId' <> NEW.organization_id::text
+       OR NEW.payload->>'organizationId' <> NEW.aggregate_id::text
+       OR NOT (NEW.payload->>'userId' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') THEN
+      RAISE EXCEPTION 'personal organization outbox payload invalid';
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM organization_memberships
+      WHERE organization_id = NEW.organization_id
+        AND user_id = (NEW.payload->>'userId')::uuid
+        AND role = 'owner'
+        AND status = 'active'
+    ) THEN
+      RAISE EXCEPTION 'personal organization outbox owner missing';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER outbox_events_enforce_personal_organization BEFORE INSERT OR UPDATE ON outbox_events FOR EACH ROW EXECUTE FUNCTION enforce_personal_organization_outbox();
+

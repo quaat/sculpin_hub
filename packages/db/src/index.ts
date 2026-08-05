@@ -1,3 +1,4 @@
+import { PrismaClient } from "../generated/prisma/index.js";
 import { Pool, type PoolConfig, type QueryConfig } from "pg";
 export {
   PostgresOutboxJobStore,
@@ -10,23 +11,38 @@ export {
   PostgresPersonalTenantTransaction,
 } from "./tenant.js";
 
-export interface PrismaClientLike {
-  $disconnect(): Promise<void>;
+export type PrismaClientLike = PrismaClient;
+
+export type PrismaClientFactory = (
+  connectionString: string,
+  readinessTimeoutMs: number,
+) => PrismaClientLike | Promise<PrismaClientLike>;
+
+function withPrismaConnectionOptions(
+  connectionString: string,
+  readinessTimeoutMs: number,
+): string {
+  const url = new URL(connectionString);
+  if (!url.searchParams.has("connection_limit"))
+    url.searchParams.set("connection_limit", "5");
+  if (!url.searchParams.has("connect_timeout"))
+    url.searchParams.set(
+      "connect_timeout",
+      String(Math.max(1, Math.ceil(readinessTimeoutMs / 1_000))),
+    );
+  return url.toString();
 }
 
-async function createPrismaClient(
+function createPrismaClient(
   connectionString: string,
-): Promise<PrismaClientLike> {
-  const loadPrisma = new Function("specifier", "return import(specifier)") as (
-    specifier: string,
-  ) => Promise<{
-    PrismaClient: new (options: {
-      datasources: { db: { url: string } };
-    }) => PrismaClientLike;
-  }>;
-  const prisma = await loadPrisma("@prisma/client");
-  return new prisma.PrismaClient({
-    datasources: { db: { url: connectionString } },
+  readinessTimeoutMs: number,
+): PrismaClientLike {
+  return new PrismaClient({
+    datasources: {
+      db: {
+        url: withPrismaConnectionOptions(connectionString, readinessTimeoutMs),
+      },
+    },
   });
 }
 
@@ -39,6 +55,7 @@ export interface Database {
 export interface DatabaseOptions extends Omit<PoolConfig, "connectionString"> {
   readinessTimeoutMs?: number;
   prismaClient?: PrismaClientLike;
+  prismaClientFactory?: PrismaClientFactory;
   onPoolError?: (error: Error) => void;
 }
 export function createDatabase(
@@ -48,6 +65,7 @@ export function createDatabase(
   const {
     readinessTimeoutMs = 2_000,
     prismaClient,
+    prismaClientFactory = createPrismaClient,
     onPoolError = () => undefined,
     max = 10,
     ...poolOptions
@@ -61,6 +79,7 @@ export function createDatabase(
   });
   let prisma = prismaClient;
   let prismaPromise: Promise<PrismaClientLike> | undefined;
+  let prismaConnectPromise: Promise<void> | undefined;
   pool.on("error", (error) => onPoolError(error));
   let closePromise: Promise<void> | undefined;
   return {
@@ -79,17 +98,26 @@ export function createDatabase(
       };
       prismaPromise ??= prisma
         ? Promise.resolve(prisma)
-        : createPrismaClient(connectionString);
+        : Promise.resolve(
+            prismaClientFactory(connectionString, readinessTimeoutMs),
+          );
       prisma = await prismaPromise;
+      prismaConnectPromise ??= prisma.$connect().catch((error: unknown) => {
+        prismaConnectPromise = undefined;
+        throw error;
+      });
+      await prismaConnectPromise;
       const result = await pool.query<{ ready: number }>(readinessQuery);
       return result.rows[0]?.ready === 1;
     },
     close() {
       closePromise ??= Promise.all([
         pool.end(),
-        prismaPromise?.then((client) => client.$disconnect()) ??
-          prisma?.$disconnect() ??
-          Promise.resolve(),
+        (prismaPromise ?? (prisma ? Promise.resolve(prisma) : undefined))
+          ?.then(async (client) => {
+            await prismaConnectPromise?.catch(() => undefined);
+            await client.$disconnect();
+          }) ?? Promise.resolve(),
       ]).then(() => undefined);
       return closePromise;
     },

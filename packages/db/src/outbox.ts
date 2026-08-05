@@ -143,28 +143,32 @@ export class PostgresOutboxJobStore implements JobStore {
         schemaVersion: number;
         attempt: number;
         maxAttempts: number;
+        claimedAt: Date;
       }>(
         `UPDATE outbox_events event
          SET claim_owner=$2, claimed_until=now()+($3::text || ' milliseconds')::interval,
              attempt_count=event.attempt_count+1, version=event.version+1
          WHERE event.id = ANY($1::uuid[])
-         RETURNING event.id, event.event_type AS type, event.schema_version AS "schemaVersion", event.attempt_count AS attempt, event.max_attempts AS "maxAttempts"`,
+         RETURNING event.id, event.event_type AS type, event.schema_version AS "schemaVersion", event.attempt_count AS attempt, event.max_attempts AS "maxAttempts", now() AS "claimedAt"`,
         [validIds, workerId, this.leaseMs],
       );
+      const jobs = claimed.rows.map((row) => {
+        const payload = payloads.get(row.id);
+        if (!payload) throw new Error("outbox_claim_payload_mismatch");
+        return {
+          id: row.id,
+          type: row.type,
+          payload,
+          attempt: {
+            attempt: row.attempt,
+            maxAttempts: row.maxAttempts,
+            claimedAt: row.claimedAt,
+            claimedBy: workerId,
+          },
+        };
+      });
       await client.query("COMMIT");
-      return claimed.rows.map((row) => ({
-        id: row.id,
-        type: row.type,
-        payload:
-          payloads.get(row.id) ??
-          validateOutboxPayload(row.type, row.schemaVersion, {}),
-        attempt: {
-          attempt: row.attempt,
-          maxAttempts: row.maxAttempts,
-          claimedAt: now,
-          claimedBy: workerId,
-        },
-      }));
+      return jobs;
     } catch (error) {
       await client.query("ROLLBACK").catch((rollbackError: unknown) => {
         throw new AggregateError(
@@ -210,9 +214,29 @@ export class PostgresOutboxJobStore implements JobStore {
       );
       const row = locked.rows[0];
       if (!row) throw new OutboxTransitionError("missing");
-      if (row.processedAt || row.terminalErrorCode) {
-        await client.query("COMMIT");
-        return "already_settled";
+      if (row.processedAt) {
+        if (result.outcome === "completed") {
+          await client.query("COMMIT");
+          return "already_settled";
+        }
+        throw new OutboxTransitionError("illegal_state");
+      }
+      if (row.terminalErrorCode) {
+        if (
+          result.outcome === "terminal_failure" &&
+          row.terminalErrorCode === result.reasonCode
+        ) {
+          await client.query("COMMIT");
+          return "already_settled";
+        }
+        if (
+          result.outcome === "retryable_failure" &&
+          row.terminalErrorCode === "attempts_exhausted"
+        ) {
+          await client.query("COMMIT");
+          return "already_settled";
+        }
+        throw new OutboxTransitionError("illegal_state");
       }
       if (row.claimOwner !== workerId)
         throw new OutboxTransitionError(
@@ -246,6 +270,10 @@ export class PostgresOutboxJobStore implements JobStore {
         Number.isNaN(result.retryAt.getTime())
       )
         throw new Error("retryAt must be a valid Date");
+      const clock = await client.query<{ now: Date }>("SELECT now() AS now");
+      const databaseNow = clock.rows[0]?.now;
+      if (!databaseNow || result.retryAt <= databaseNow)
+        throw new Error("retryAt must be later than the database time");
       await client.query(
         "UPDATE outbox_events SET available_at=$2, claim_owner=NULL, claimed_until=NULL, version=version+1 WHERE id=$1",
         [jobId, result.retryAt],
