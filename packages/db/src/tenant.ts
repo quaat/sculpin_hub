@@ -55,8 +55,8 @@ export class PostgresPersonalTenantTransaction
           ],
         );
       const organization = await client.query<{ id: string }>(
-        "INSERT INTO organizations (slug, type) VALUES ($1, 'personal') RETURNING id",
-        [command.organizationSlug],
+        "INSERT INTO organizations (slug, type, personal_owner_user_id) VALUES ($1, 'personal', $2) RETURNING id",
+        [command.organizationSlug, userId],
       );
       const organizationId = organization.rows[0]?.id;
       if (!organizationId) throw new Error("organization_insert_failed");

@@ -9,6 +9,7 @@ describe("worker runtime", () => {
     const close = vi.fn().mockResolvedValue(undefined);
     const db: Database = {
       pool: {} as never,
+      prisma: {} as never,
       ready,
       close,
     };
@@ -26,6 +27,7 @@ describe("worker runtime", () => {
   it("fails clearly if its required database is unavailable", async () => {
     const db: Database = {
       pool: {} as never,
+      prisma: {} as never,
       ready: vi.fn().mockResolvedValue(false),
       close: vi.fn(),
     };

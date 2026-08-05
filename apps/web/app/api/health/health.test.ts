@@ -17,6 +17,7 @@ describe("web health", () => {
       env,
       () => ({
         pool: {} as never,
+        prisma: {} as never,
         ready: () => Promise.resolve(true),
         close: vi.fn(),
       }),
@@ -32,6 +33,7 @@ describe("web health", () => {
       env,
       () => ({
         pool: {} as never,
+        prisma: {} as never,
         ready: () => Promise.reject(new Error("secret internal detail")),
         close: () => Promise.resolve(),
       }),

@@ -5,3 +5,5 @@ node_modules
 pnpm-lock.yaml
 
 docs/sculpin-knowledge-hub-implementation-plan.md
+
+packages/db/generated/prisma/

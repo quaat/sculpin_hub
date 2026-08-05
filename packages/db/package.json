@@ -6,10 +6,13 @@
   "exports": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "pnpm --workspace-root prisma:generate && tsc -p tsconfig.json",
     "lint": "eslint src",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "pretypecheck": "pnpm --workspace-root prisma:generate",
+    "pretest": "pnpm --workspace-root prisma:generate",
+    "prelint": "pnpm --workspace-root prisma:generate"
   },
   "dependencies": {
     "@sculpin/domain": "workspace:*",

@@ -2,7 +2,7 @@
 
 Foundation workspace for the Sculpin Knowledge Hub. This slice provides a public presentation UI, health-aware web/proxy/worker workloads, shared configuration/contracts/logging/database/job seams, local PostgreSQL and Redis, tests, CI, and secure container foundations.
 
-> **Not enabled:** authentication, organizations, subscriptions, billing, API tokens, external accounting, Sculpin forwarding, production routes, and Azure infrastructure. All catalog and price content is explicitly illustrative.
+> **Not enabled:** authentication, OAuth callbacks, sessions, sign-in/onboarding, subscriptions, billing, API tokens, external accounting, Sculpin forwarding, production routes, Redis rate enforcement, admin bootstrap, and Azure infrastructure. All catalog and price content is explicitly illustrative.
 
 ## Prerequisites
 
@@ -79,7 +79,7 @@ After building all three images and starting Compose dependencies, exercise the 
 ./scripts/container-smoke.sh
 ```
 
-The script verifies non-root image users, web/proxy liveness and PostgreSQL readiness, the worker's deliberate idle state, and bounded `SIGTERM` shutdown. Proxy and worker shutdown is single-shot, closes owned pools at most once, reports failures safely, and forces a non-zero exit on failure or timeout. PostgreSQL readiness uses `SELECT 1` with a two-second query timeout; idle pool errors are passed to a safe workload logging callback without connection details.
+The script verifies non-root image users, web/proxy liveness and PostgreSQL readiness from final production images, Prisma Client load/initialization through readiness, the worker's deliberate idle state, and bounded `SIGTERM` shutdown. Proxy and worker shutdown is single-shot, closes owned pools at most once, reports failures safely, and forces a non-zero exit on failure or timeout. PostgreSQL readiness uses `SELECT 1` with a two-second query timeout; idle pool errors are passed to a safe workload logging callback without connection details.
 
 Public readiness returns only `ready`/`not_ready` and the service name. Dependency names remain internal to reduce infrastructure disclosure. Redis is not a readiness dependency because no workload uses it yet.
 
@@ -91,7 +91,7 @@ The production Sculpin route registry remains empty. `/v1`, `/v1/`, and every un
 - [UI design specification](docs/ui-design-spec.md)
 - [Architecture decisions](docs/adr/)
 
-The recommended next focused pull request is the first meaningful PostgreSQL domain baseline: users, external identities, personal organizations, memberships, audit events, and transactional outbox—without enabling OAuth until ADR 004 is resolved.
+After this tenant-persistence branch merges, the recommended next focused pull request is the identity decision and Google test-provider branch, subject to ADR 004, without enabling production OAuth callbacks or sessions.
 
 ## Tenant persistence baseline
 
@@ -109,13 +109,13 @@ Prisma Migrate is the single migration authority. Apply reviewed SQL migrations 
 DATABASE_URL=postgresql://sculpin:password@127.0.0.1:5432/sculpin_hub pnpm db:migrate:deploy
 ```
 
-Migration tests require PostgreSQL access through `DATABASE_URL`; they create a fresh temporary database, deploy migrations twice, and run the Prisma drift check:
+Migration tests require PostgreSQL access through `DATABASE_URL`; they create a fresh temporary database, deploy migrations twice, check Prisma migration status, validate and generate the Prisma Client, run the Prisma-supported drift check with a shadow database, and directly exercise custom PostgreSQL triggers, checks, foreign keys, and index-backed invariants that Prisma diff does not inspect:
 
 ```bash
 DATABASE_URL=postgresql://sculpin:password@127.0.0.1:5432/sculpin_hub pnpm db:migration:test
 ```
 
-The persistence branch intentionally keeps authentication, OAuth callbacks, sessions, products, plans, subscriptions, API tokens, accounting, billing, Sculpin forwarding, public control APIs, Redis enforcement, admin bootstrap, and Azure infrastructure disabled. Production proxy routes remain unregistered until a later reviewed branch enables them.
+The tenant persistence baseline implements users, external identities, personal organizations, memberships, append-only audit events, and the transactional outbox. It intentionally keeps authentication, OAuth callbacks, sessions, products, plans, subscriptions, API tokens, accounting, billing, Sculpin forwarding, public control APIs, Redis enforcement, admin bootstrap, and Azure infrastructure disabled. Production proxy routes remain unregistered until a later reviewed branch enables them.
 
 ### ESLint framework rules
 
