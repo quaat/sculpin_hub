@@ -1,0 +1,57 @@
+# Sculpin Hub — Milestone Tracker
+
+This is the **milestone-level execution tracker**. The authoritative long-form design lives in
+[`sculpin-knowledge-hub-implementation-plan.md`](sculpin-knowledge-hub-implementation-plan.md)
+(generated from [`../plan.md`](../plan.md)) and the ADRs in [`adr/`](adr/). This file records
+the orchestration milestones the lead agent executes and their acceptance criteria. Live
+status is in [`STATUS.md`](STATUS.md).
+
+> **Scope note / divergence:** the long-form plan predates the current mission and references
+> Google/**LinkedIn** login and **Stripe** billing. The current mission supersedes those:
+> identity is Google/**GitHub**, and there are **no payments in v1** (trial + commercial
+> subscriptions without a payment provider). See [`DECISIONS.md`](DECISIONS.md#d-004).
+
+## Milestones
+
+| ID | Milestone | Depends on | Status |
+|----|-----------|-----------|--------|
+| M0 | Sculpin upstream discovery → `SCULPIN_INTEGRATION.md` + route policy inputs | — | in progress |
+| M1 | Durable scaffolding (this doc set, CLAUDE.md, AGENT.md, skills) | — | in progress |
+| M2 | Identity & OAuth (Google/GitHub), sessions, roles, admin bootstrap | M0, M1 | pending |
+| M3 | Sculpin catalogue: admin-published knowledge bases/agents, public model aliases | M0, M2 | pending |
+| M4 | Plans & subscriptions (trial + commercial, NO payments), entitlements | M2, M3 | pending |
+| M5 | Personal Access Tokens lifecycle (+ dedicated security review) | M2, M4 | pending |
+| M6 | OpenAI-compatible proxy / broker (fail-closed registry, streaming) | M0, M5 | pending |
+| M7 | Usage metering, quota reservation, analytics/audit | M4, M6 | pending |
+| M8 | Azure deployment (Key Vault, managed identity, IaC) | M6 | pending |
+| M9 | Complete verification (security, E2E, ops readiness) | all | pending |
+
+## Acceptance criteria (per milestone)
+
+- **M0:** Route inventory table of every real Sculpin `/v1/*` endpoint; auth mechanism + env
+  var name; base URL/port; model↔agent mapping; streaming/SSE framing; open questions listed.
+  No upstream files modified.
+- **M1:** CLAUDE.md, AGENT.md, STATUS.md, DECISIONS.md, SESSION_LOG.md, THREAT_MODEL.md,
+  DEPLOYMENT.md, OPERATIONS.md present and cross-referenced; harmonized with existing ADRs.
+- **M2:** OAuth (Google/GitHub) with state/nonce/PKCE, redirect allowlist, secure cookies,
+  no unsafe email-based linking; USER/ADMIN roles; `BOOTSTRAP_ADMIN_EMAILS`. ADR 004 resolved.
+- **M3:** Admins publish/unpublish catalogue entries; public model alias → upstream agent id
+  map; internal Sculpin config never leaked to clients.
+- **M4:** Subscription state machine; entitlement resolution as union of active subscriptions;
+  atomic trial quota reservation. No payment provider.
+- **M5:** PAT `sclp_pat_<id>_<secret>`, HMAC-SHA-256 keyed digest, one-time display, constant-
+  time verify, revocation prompt. Tests prove DB contents aren't usable as bearer creds and
+  logs contain no token values. Security review passed.
+- **M6:** Default-DENY `/v1/*` registry; only confirmed Sculpin routes registered; upstream
+  credential injection centralized; SSE passthrough byte-for-byte; no PAT/cookie/Authorization
+  forwarded upstream; no internal URL leaked.
+- **M7:** Usage events without secrets/prompts/bodies; atomic quota under concurrency (tested
+  at last-quota); analytics/audit surfaces.
+- **M8:** Secrets via Key Vault + managed identity; no secrets in IaC; private connectivity to
+  Sculpin considered.
+- **M9:** Full security review, E2E flows, ops runbook, SLOs, rollback verified.
+
+## Guardrails
+
+All milestones inherit the fail-closed security rules in [`../CLAUDE.md`](../CLAUDE.md) and the
+read-only Sculpin upstream constraint. Verify before marking complete.

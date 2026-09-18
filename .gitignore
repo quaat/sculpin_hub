@@ -9,4 +9,7 @@ coverage/
 .DS_Store
 *.log
 
+.claude/settings.local.json
+.turbo/
+
 packages/db/generated/prisma/

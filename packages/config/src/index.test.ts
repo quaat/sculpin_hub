@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   parseProxyConfig,
+  parseWebAuthConfig,
   parseWebConfig,
   parseWorkerConfig,
 } from "./index.js";
 const valid = {
   NODE_ENV: "test",
   DATABASE_URL: "postgresql://user:canary-secret@localhost:5432/test",
+};
+const validAuth = {
+  NODE_ENV: "test",
+  BETTER_AUTH_SECRET: "unit-test-better-auth-secret-32chars!!",
+  BETTER_AUTH_URL: "http://localhost:3000",
+  GOOGLE_CLIENT_ID: "google-client-id",
+  GOOGLE_CLIENT_SECRET: "google-client-secret",
+  GITHUB_CLIENT_ID: "github-client-id",
+  GITHUB_CLIENT_SECRET: "github-client-secret",
 };
 describe("runtime configuration", () => {
   it("parses separate valid application configuration", () => {
@@ -53,5 +63,63 @@ describe("runtime configuration", () => {
           "postgresql://sculpin:local-development-only@localhost:5432/sculpin_hub",
       }),
     ).toThrow("DATABASE_URL production safety");
+  });
+});
+describe("web auth configuration", () => {
+  it("parses a complete auth environment", () => {
+    const config = parseWebAuthConfig(validAuth);
+    expect(config.betterAuthUrl).toBe("http://localhost:3000");
+    expect(config.googleClientId).toBe("google-client-id");
+    expect(config.bootstrapAdminEmails).toEqual([]);
+  });
+  it("normalizes and lowercases the admin allowlist", () => {
+    const config = parseWebAuthConfig({
+      ...validAuth,
+      BOOTSTRAP_ADMIN_EMAILS: " Root@Example.com , second@example.io ",
+    });
+    expect(config.bootstrapAdminEmails).toEqual([
+      "root@example.com",
+      "second@example.io",
+    ]);
+  });
+  it("fails closed when required auth env is missing", () => {
+    expect(() =>
+      parseWebAuthConfig({ NODE_ENV: "test" }),
+    ).toThrow("BETTER_AUTH_SECRET");
+  });
+  it("rejects a short auth secret", () => {
+    expect(() =>
+      parseWebAuthConfig({ ...validAuth, BETTER_AUTH_SECRET: "too-short" }),
+    ).toThrow("BETTER_AUTH_SECRET");
+  });
+  it("rejects invalid admin emails", () => {
+    expect(() =>
+      parseWebAuthConfig({
+        ...validAuth,
+        BOOTSTRAP_ADMIN_EMAILS: "not-an-email",
+      }),
+    ).toThrow("BOOTSTRAP_ADMIN_EMAILS");
+  });
+  it("does not echo the auth secret in errors", () => {
+    let message = "";
+    try {
+      parseWebAuthConfig({
+        ...validAuth,
+        BETTER_AUTH_URL: "not a url",
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("BETTER_AUTH_URL");
+    expect(message).not.toContain(validAuth.BETTER_AUTH_SECRET);
+  });
+  it("requires a secure origin in production", () => {
+    expect(() =>
+      parseWebAuthConfig({
+        ...validAuth,
+        NODE_ENV: "production",
+        BETTER_AUTH_URL: "http://hub.example.com",
+      }),
+    ).toThrow("BETTER_AUTH_URL production safety");
   });
 });

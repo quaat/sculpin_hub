@@ -15,7 +15,9 @@
     "@sculpin/api-contracts": "workspace:*",
     "@sculpin/config": "workspace:*",
     "@sculpin/db": "workspace:*",
+    "@sculpin/domain": "workspace:*",
     "@sculpin/observability": "workspace:*",
+    "better-auth": "1.7.5",
     "next": "15.5.7",
     "react": "19.1.1",
     "react-dom": "19.1.1"

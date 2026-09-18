@@ -43,20 +43,29 @@ enum MembershipStatus {
   @@map("membership_status")
 }
 
+enum PlatformRole {
+  user
+  admin
+
+  @@map("platform_role")
+}
+
 model User {
-  id                 String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  normalizedEmail    String                   @map("normalized_email") @db.VarChar(254)
-  displayName        String                   @map("display_name") @db.VarChar(120)
-  status             UserStatus               @default(active)
-  locale             String                   @db.VarChar(16)
-  deactivatedAt      DateTime?                @map("deactivated_at") @db.Timestamptz(6)
-  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
-  version            Int                      @default(1)
-  externalIdentities ExternalIdentity[]
-  memberships        OrganizationMembership[]
-  personalOrganization Organization?              @relation("PersonalOrganizationOwner")
-  auditEvents        AuditEvent[]
+  id                   String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  normalizedEmail      String                   @map("normalized_email") @db.VarChar(254)
+  displayName          String                   @map("display_name") @db.VarChar(120)
+  role                 PlatformRole             @default(user)
+  status               UserStatus               @default(active)
+  locale               String                   @db.VarChar(16)
+  deactivatedAt        DateTime?                @map("deactivated_at") @db.Timestamptz(6)
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version              Int                      @default(1)
+  externalIdentities   ExternalIdentity[]
+  memberships          OrganizationMembership[]
+  personalOrganization Organization?            @relation("PersonalOrganizationOwner")
+  auditEvents          AuditEvent[]
+  sessions             Session[]
 
   @@index([normalizedEmail], map: "idx_users_normalized_email")
   @@index([status], map: "idx_users_status")
@@ -64,16 +73,16 @@ model User {
 }
 
 model ExternalIdentity {
-  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId           String   @map("user_id") @db.Uuid
-  provider         String   @db.VarChar(32)
-  providerSubject  String   @map("provider_subject") @db.VarChar(255)
-  providerEmail    String?  @map("provider_email") @db.VarChar(254)
-  emailVerified    Boolean  @default(false) @map("email_verified")
-  metadata         Json?    @map("safe_metadata")
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
-  user             User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  provider        String   @db.VarChar(32)
+  providerSubject String   @map("provider_subject") @db.VarChar(255)
+  providerEmail   String?  @map("provider_email") @db.VarChar(254)
+  emailVerified   Boolean  @default(false) @map("email_verified")
+  metadata        Json?    @map("safe_metadata")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@unique([provider, providerSubject], map: "external_identities_provider_provider_subject_key")
   @@index([userId], map: "idx_external_identities_user_id")
@@ -100,15 +109,15 @@ model Organization {
 }
 
 model OrganizationMembership {
-  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId String             @map("organization_id") @db.Uuid
-  userId         String             @map("user_id") @db.Uuid
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  userId         String           @map("user_id") @db.Uuid
   role           MembershipRole
-  status         MembershipStatus   @default(active)
-  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
-  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  user           User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  status         MembershipStatus @default(active)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Restrict)
   auditEvents    AuditEvent[]
 
   @@unique([organizationId, userId], map: "organization_memberships_organization_id_user_id_key")
@@ -118,19 +127,19 @@ model OrganizationMembership {
 }
 
 model AuditEvent {
-  id             String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId String                  @map("organization_id") @db.Uuid
-  actorUserId    String?                 @map("actor_user_id") @db.Uuid
-  systemActor    String?                 @map("system_actor") @db.VarChar(64)
-  action         String                  @db.VarChar(120)
-  targetType     String                  @map("target_type") @db.VarChar(64)
-  targetId       String                  @map("target_id") @db.Uuid
-  beforeSummary  Json?                   @map("before_summary")
-  afterSummary   Json?                   @map("after_summary")
-  requestId      String                  @map("request_id") @db.VarChar(128)
-  occurredAt     DateTime                @map("occurred_at") @db.Timestamptz(6)
-  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  actorUser      User?                   @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
+  id              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId  String                  @map("organization_id") @db.Uuid
+  actorUserId     String?                 @map("actor_user_id") @db.Uuid
+  systemActor     String?                 @map("system_actor") @db.VarChar(64)
+  action          String                  @db.VarChar(120)
+  targetType      String                  @map("target_type") @db.VarChar(64)
+  targetId        String                  @map("target_id") @db.Uuid
+  beforeSummary   Json?                   @map("before_summary")
+  afterSummary    Json?                   @map("after_summary")
+  requestId       String                  @map("request_id") @db.VarChar(128)
+  occurredAt      DateTime                @map("occurred_at") @db.Timestamptz(6)
+  organization    Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  actorUser       User?                   @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
   actorMembership OrganizationMembership? @relation(fields: [organizationId, actorUserId], references: [organizationId, userId], onDelete: Restrict)
 
   @@index([organizationId, occurredAt], map: "idx_audit_events_org_occurred")
@@ -158,4 +167,35 @@ model OutboxEvent {
 
   @@index([organizationId, aggregateType, aggregateId], map: "idx_outbox_events_org_aggregate")
   @@map("outbox_events")
+}
+
+// Better Auth server-side (database) session. The cookie carries only the
+// opaque `token`; all session state lives here. Revocation = delete/expire row.
+model Session {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  token     String   @unique @db.VarChar(255)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  ipAddress String?  @map("ip_address") @db.VarChar(64)
+  userAgent String?  @map("user_agent") @db.VarChar(512)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "idx_sessions_user_id")
+  @@index([expiresAt], map: "idx_sessions_expires_at")
+  @@map("sessions")
+}
+
+// Better Auth verification table (email verification / one-time tokens etc.).
+model Verification {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  identifier String   @db.VarChar(255)
+  value      String   @db.VarChar(512)
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@index([identifier], map: "idx_verifications_identifier")
+  @@map("verifications")
 }

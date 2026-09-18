@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export * from "./models.js";
+
 const environmentSchema = z.enum(["development", "test", "production"]);
 const port = z.coerce.number().int().min(1).max(65535);
 const baseSchema = z.object({
@@ -22,6 +24,15 @@ export interface CommonConfig {
   environment: RuntimeEnvironment;
   logLevel: string;
   databaseUrl: string;
+}
+export interface AuthConfig {
+  betterAuthSecret: string;
+  betterAuthUrl: string;
+  googleClientId: string;
+  googleClientSecret: string;
+  githubClientId: string;
+  githubClientSecret: string;
+  bootstrapAdminEmails: readonly string[];
 }
 export type WebConfig = CommonConfig;
 export interface ProxyConfig extends CommonConfig {
@@ -72,6 +83,76 @@ export function parseWebConfig(input: NodeJS.ProcessEnv): WebConfig {
   const result = common(value);
   assertProductionDatabaseSafety(result);
   return result;
+}
+
+const bootstrapAdminEmails = z
+  .string()
+  .optional()
+  .transform((value) =>
+    (value ?? "")
+      .split(",")
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => entry.length > 0),
+  )
+  .pipe(
+    z
+      .array(
+        z
+          .string()
+          .max(254)
+          .email("must be a list of valid email addresses"),
+      )
+      .max(64),
+  );
+
+const authSchema = z.object({
+  BETTER_AUTH_SECRET: z
+    .string()
+    .min(32, "must be at least 32 characters")
+    .max(512),
+  BETTER_AUTH_URL: z
+    .string()
+    .url()
+    .refine(
+      (value) =>
+        value.startsWith("https://") || value.startsWith("http://"),
+      "must be an absolute http(s) origin",
+    ),
+  GOOGLE_CLIENT_ID: z.string().min(1),
+  GOOGLE_CLIENT_SECRET: z.string().min(1),
+  GITHUB_CLIENT_ID: z.string().min(1),
+  GITHUB_CLIENT_SECRET: z.string().min(1),
+  BOOTSTRAP_ADMIN_EMAILS: bootstrapAdminEmails,
+});
+
+function assertProductionAuthUrlSafety(
+  environment: RuntimeEnvironment,
+  betterAuthUrl: string,
+): void {
+  if (
+    environment === "production" &&
+    (betterAuthUrl.startsWith("http://") ||
+      /localhost|127\.0\.0\.1/.test(betterAuthUrl))
+  ) {
+    throw new Error(
+      "Invalid runtime configuration. Check: BETTER_AUTH_URL production safety.",
+    );
+  }
+}
+
+export function parseWebAuthConfig(input: NodeJS.ProcessEnv): AuthConfig {
+  const environment = parse(baseSchema.pick({ NODE_ENV: true }), input).NODE_ENV;
+  const value = parse(authSchema, input);
+  assertProductionAuthUrlSafety(environment, value.BETTER_AUTH_URL);
+  return {
+    betterAuthSecret: value.BETTER_AUTH_SECRET,
+    betterAuthUrl: value.BETTER_AUTH_URL,
+    googleClientId: value.GOOGLE_CLIENT_ID,
+    googleClientSecret: value.GOOGLE_CLIENT_SECRET,
+    githubClientId: value.GITHUB_CLIENT_ID,
+    githubClientSecret: value.GITHUB_CLIENT_SECRET,
+    bootstrapAdminEmails: value.BOOTSTRAP_ADMIN_EMAILS,
+  };
 }
 export function parseProxyConfig(input: NodeJS.ProcessEnv): ProxyConfig {
   const schema = baseSchema
