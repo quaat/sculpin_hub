@@ -1,8 +1,8 @@
 # Sculpin Knowledge Hub
 
-Foundation workspace for the Sculpin Knowledge Hub. This slice provides a public presentation UI, health-aware web/proxy/worker workloads, shared configuration/contracts/logging/database/job seams, local PostgreSQL and Redis, tests, CI, and secure container foundations.
+Foundation workspace for the Sculpin Knowledge Hub. It provides a public presentation UI, health-aware web/proxy/worker workloads, shared configuration/contracts/logging/database/job seams, local PostgreSQL and Redis, tests, CI, and secure container foundations. **Identity is live (M2):** Google/GitHub OAuth (PKCE, database sessions), atomic personal-tenant provisioning on first sign-in, USER/ADMIN roles, and `BOOTSTRAP_ADMIN_EMAILS` admin bootstrap.
 
-> **Not enabled:** authentication, OAuth callbacks, sessions, sign-in/onboarding, subscriptions, billing, API tokens, external accounting, Sculpin forwarding, production routes, Redis rate enforcement, admin bootstrap, and Azure infrastructure. All catalog and price content is explicitly illustrative.
+> **Not enabled yet:** subscriptions/entitlements, API tokens (PATs), usage accounting, production Sculpin proxy routes (the `/v1/*` registry is empty and fail-closed), Redis rate enforcement, and Azure infrastructure. All catalog and price content is explicitly illustrative. A **development-only** Sculpin forwarder exists (see below) and is slated for deletion in M6. See [`docs/STATUS.md`](docs/STATUS.md) for the live snapshot.
 
 ## Prerequisites
 
@@ -50,6 +50,12 @@ Web pages: `/`, `/products`, `/pricing`, `/dashboard`, and `/documentation`. Web
 
 ### Development-only Sculpin forwarding
 
+> **Temporary bring-up hack — to be deleted in M6 (Phase A).** This blind forwarder relays the
+> caller's headers verbatim and injects no upstream credential, which violates the fail-closed
+> proxy rules in [`CLAUDE.md`](CLAUDE.md). It is gated to `NODE_ENV=development` and inert in
+> production, and will be replaced by the reviewed fail-closed registry + centralized
+> credential injection. Do not build on it.
+
 To point the proxy at a local Sculpin instance (for example one exposed over reverse port forwarding), set `SCULPIN_UPSTREAM_URL` in `.env`:
 
 ```bash
@@ -69,7 +75,7 @@ pnpm test:integration                 # requires the Compose PostgreSQL service
 pnpm build
 ```
 
-Run formatting fixes with `pnpm format`. The deterministic unit suite does not call Google, LinkedIn, Stripe, accounting, Sculpin, Azure, or any other external service.
+Run formatting fixes with `pnpm format`. The deterministic unit suite does not call Google, GitHub, Sculpin, Azure, or any other external service (identity uses Google/GitHub; there is no payment provider in v1 — see [D-004](docs/DECISIONS.md#d-004--mission-supersedes-the-long-form-plan-on-identity--billing)).
 
 ## Containers
 
@@ -101,7 +107,7 @@ The production Sculpin route registry remains empty. In production `/v1`, `/v1/`
 - [UI design specification](docs/ui-design-spec.md)
 - [Architecture decisions](docs/adr/)
 
-After this tenant-persistence branch merges, the recommended next focused pull request is the identity decision and Google test-provider branch, subject to ADR 004, without enabling production OAuth callbacks or sessions.
+Identity (M2) is complete and live-verified. The next focused increments follow the phased path in [`docs/NEXT_PHASE_PLAN.md`](docs/NEXT_PHASE_PLAN.md): a safe fail-closed data plane (M6 Phase A, replacing the dev forwarder), PAT authentication (M5), catalogue + minimal entitlement (M3 + thin M4), then metering + atomic quota (M7).
 
 ## Tenant persistence baseline
 
@@ -125,7 +131,7 @@ Migration tests require PostgreSQL access through `DATABASE_URL`; they create a 
 DATABASE_URL=postgresql://sculpin:password@127.0.0.1:5432/sculpin_hub pnpm db:migration:test
 ```
 
-The tenant persistence baseline implements users, external identities, personal organizations, memberships, append-only audit events, and the transactional outbox. It intentionally keeps authentication, OAuth callbacks, sessions, products, plans, subscriptions, API tokens, accounting, billing, Sculpin forwarding, public control APIs, Redis enforcement, admin bootstrap, and Azure infrastructure disabled. Production proxy routes remain unregistered until a later reviewed branch enables them.
+The tenant persistence baseline implements users, external identities, personal organizations, memberships, append-only audit events, and the transactional outbox. Identity (Google/GitHub OAuth, database sessions, admin bootstrap) is layered on top and live (M2). It intentionally keeps products, plans, subscriptions, API tokens, accounting, public control APIs, Redis enforcement, and Azure infrastructure disabled. Production proxy routes remain unregistered (fail-closed) until a later reviewed branch enables them.
 
 ### ESLint framework rules
 

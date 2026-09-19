@@ -35,11 +35,14 @@ This is a thin vertical slice across milestones **M6** (proxy), **M5** (PATs), *
 - **Schema tradeoff:** the Full Better Auth migration retains provider tokens in
   `external_identities` (explicit product decision), relaxing minimal-token-retention (rule 5).
 
-## Blocker to resolve first
+## No open blocker (tenant mapping resolved)
 
-The **Sculpin tenant-mapping decision** is still `OPEN` in [`DECISIONS.md`](DECISIONS.md). It
-determines how a Hub user/org maps onto Sculpin's agent/knowledge-base surface and therefore
-shapes the catalogue and entitlement model in Phase C. Close it before starting Phase C.
+The **Sculpin tenant-mapping decision** is **resolved** by
+[D-008](DECISIONS.md#d-008--sculpin-tenant-mapping-single-shared-upstream-key-in-v1): the Hub
+authenticates to Sculpin as a **single shared upstream credential**, and all Hub users see the
+same agent set surfaced through an admin-curated **public-model-alias → Sculpin agent** map;
+per-tenant Sculpin keys are deferred (M3 catalogue and M6 credential-injection are structured so
+a per-tenant resolver can be added later). Phase C can proceed on this basis.
 
 ## Phases
 

@@ -17,7 +17,9 @@ _Last updated: 2026-09-19_
   - `model` = agent slug or UUID. SSE = `data: <json>\n\n`, `: keep-alive\n\n`, `data: [DONE]`.
   - A separate native `/api/v1/*` back-office API exists and must be denied by the proxy.
   - **Caveat:** upstream `usage` is a heuristic (`len/4`), not real tokens (D-007).
-  - Proxy route policy derived → D-006. Tenant-mapping question flagged to user (DECISIONS OPEN).
+  - Proxy route policy derived → D-006. Sculpin tenant-mapping **resolved** by D-008
+    (single shared upstream credential; admin-curated public-alias→agent map; per-tenant keys
+    deferred). No open blocker remains here.
 - **M1 (scaffolding):** ✅ complete — CLAUDE.md, AGENT.md, and the full `docs/` scaffolding set
   created and cross-referenced.
 - **M2 (identity):** ADR 004 resolved → **Better Auth**, database sessions, Google/GitHub, PKCE
@@ -79,12 +81,26 @@ blind route pass-through). It MUST be replaced by the fail-closed registry + cen
 credential injection (Phase A of [`NEXT_PHASE_PLAN.md`](NEXT_PHASE_PLAN.md)) before any real
 test-case use.
 
-## Uncommitted working-tree changes
+## Working-tree state
 
-- `packages/config/src/models.ts` (new) + `export * from "./models.js"` in
-  `packages/config/src/index.ts` — Foundry model constants (`claude-opus-5`, `claude-fable-5`).
-- Scaffolding docs (this set) and `.claude/settings.local.json` sandbox read-allow for the
-  Sculpin upstream (gitignored).
+- Tracked tree is **clean** — the prior `packages/config/src/models.ts` (Foundry model
+  constants) and scaffolding docs are committed. Only untracked non-project artifacts remain
+  (local `.env`/dotfiles, `pr3.patch`, `sculpin_hub*.zip`); none are committed.
+- `.claude/settings.local.json` (sandbox read-allow for the read-only Sculpin upstream) is
+  local-only and untracked.
+
+## Baseline verification (2026-09-19)
+
+- `pnpm install --frozen-lockfile` and `prisma:generate`: OK. `tsc --noEmit` clean for web +
+  proxy. Unit tests: **111 passed / 15 skipped**; web package **38/38** under its own config.
+  Integration tests require Compose Postgres (skipped in the deterministic run).
+- **Env caveat:** the sandbox pins Node to v26 while the repo targets `22.22.2`. `turbo` fails
+  with "cannot find package manager binary" until the nvm `v22.22.2/bin` dir is on `PATH`
+  (which supplies a real `pnpm` shim); with that prefix the standard `pnpm lint|typecheck|test`
+  scripts run. Alternatively invoke compilers directly per CLAUDE.md.
+- **Test-runner caveat:** running the root `vitest` across all packages misreports
+  `apps/web/app/app.test.tsx` as failing ("React is not defined") because the web JSX-automatic
+  runtime lives in `apps/web/vitest.config.ts`; run web tests package-scoped (they pass 38/38).
 
 ## Next up — path to a real test-case scenario
 
@@ -106,7 +122,8 @@ across M3/M5/M6/M7:
 - **Phase D — metering + atomic quota (M7).** Usage events with no secrets/prompts/bodies;
   atomic trial-quota reservation (tested at last quota under concurrency).
 
-Blocked on user input: the Sculpin tenant-mapping decision (DECISIONS "OPEN") shapes Phase C.
+No open blockers: the Sculpin tenant-mapping decision that shapes Phase C is **resolved** by
+D-008 (single shared upstream credential; admin-curated public-alias→agent map).
 
 Manual test prerequisites (user): SSH tunnel putting Sculpin on the configured
 `SCULPIN_UPSTREAM_URL`; Google redirect URI `http://localhost:3002/api/auth/callback/google`;
