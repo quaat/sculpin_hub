@@ -17,6 +17,7 @@
     "format:check": "prettier --check .",
     "env:smoke": "node --env-file=.env --import tsx scripts/check-dev-environment.ts",
     "test:integration": "pnpm prisma:generate && node --env-file=.env scripts/run-db-integration.mjs",
+    "test:e2e": "pnpm prisma:generate && node --env-file=.env scripts/run-proxy-e2e.mjs",
     "db:migrate:deploy": "prisma migrate deploy --schema packages/db/prisma/schema.prisma",
     "prisma:format": "node scripts/prisma-format.mjs",
     "prisma:validate": "prisma validate --schema packages/db/prisma/schema.prisma",
@@ -27,14 +28,15 @@
     "@eslint/js": "9.33.0",
     "@types/node": "22.17.2",
     "eslint": "9.33.0",
+    "openai": "7.20.0",
+    "pg": "8.16.3",
     "prettier": "3.6.2",
+    "prisma": "6.19.3",
+    "tsx": "4.20.5",
     "turbo": "2.5.6",
     "typescript": "5.9.2",
     "typescript-eslint": "8.39.1",
-    "vitest": "3.2.4",
-    "tsx": "4.20.5",
-    "prisma": "6.19.3",
-    "pg": "8.16.3"
+    "vitest": "3.2.4"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

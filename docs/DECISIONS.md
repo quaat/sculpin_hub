@@ -28,14 +28,15 @@ that would become obsolete. **Date:** 2026-09-17. **By:** mission instruction.
 ## D-004 — Mission supersedes the long-form plan on identity & billing
 
 **Decision:** The current mission overrides the older long-form plan where they conflict:
+
 - Identity providers are **Google and GitHub** (the long-form plan and `plan.md` say Google/
   **LinkedIn**).
 - **No payment provider in v1** — trial and commercial subscriptions exist, but there is no
   Stripe/checkout/billing integration (the long-form plan includes Stripe). Architecture must
   still not preclude adding billing later.
-**Date:** 2026-09-17. **By:** mission instruction. Supersedes conflicting parts of
-[`sculpin-knowledge-hub-implementation-plan.md`](sculpin-knowledge-hub-implementation-plan.md).
-Note: ADR 004 (auth session storage) is still Open and must be resolved in M2.
+  **Date:** 2026-09-17. **By:** mission instruction. Supersedes conflicting parts of
+  [`sculpin-knowledge-hub-implementation-plan.md`](sculpin-knowledge-hub-implementation-plan.md).
+  Note: ADR 004 (auth session storage) is still Open and must be resolved in M2.
 
 ## D-005 — PAT verification uses HMAC, not password hashing
 
@@ -73,15 +74,16 @@ adapter. **No orphan window.** Chosen over 2-phase+reconciliation (introduces an
 window) and a full custom adapter (~200 LOC coupled to internals).
 
 **Concrete mechanism (verified against `better-auth@1.7.5` source, `apps/web/app/lib/auth.ts`):**
+
 - The Prisma client handed to `prismaAdapter` is wrapped by `withProvisioningTxCapture`, a Proxy
   whose interactive `$transaction(fn)` runs `fn` inside an `AsyncLocalStorage` carrying the tx
   client. (Array/batch `$transaction` and all other members pass through untouched.)
 - Provisioning is triggered from **`databaseHooks.account.create.before`**, NOT user create.
   Rationale from source: in `createOAuthUser` the user row is created first, then the account —
-  both inside one `runWithTransaction`. `create.before` hooks run *in-transaction*, but
+  both inside one `runWithTransaction`. `create.before` hooks run _in-transaction_, but
   `create.after` hooks are queued via `queueAfterTransactionHook` and fire **post-commit
   (non-atomic)**. `user.create.before` has no user id yet. `account.create.before` is the only
-  config-level seam that runs in-transaction *after* the user row exists (it carries
+  config-level seam that runs in-transaction _after_ the user row exists (it carries
   `account.userId`), so that is where provisioning runs.
 - `provisionPersonalTenant` no longer inserts the user (Better Auth owns `users` and, via the
   account create, `external_identities`). It is idempotent (skips if a personal org already
@@ -304,6 +306,41 @@ integration 38 (adds a catalogue `listPublishedModels` projection test); the con
 quota race is covered by `subscription.integration.test.ts`. **Independent opus security review:
 PASS** (0 blocking, 0 major, 5 minor/by-design). **By:** M6/M7 implementation pass.
 
+## D-018 — Stage F: deterministic end-to-end proof with the stock OpenAI SDK
+
+**Decision (2026-09-20):** Add a deterministic, self-contained end-to-end test that drives the real
+secure proxy with the **stock `openai` npm SDK** (pinned `7.20.0`, a workspace-root devDependency)
+against a **fake in-process Sculpin** and an **ephemeral PostgreSQL** — exercising the whole
+M3/M4/M5/M6 slice at once with NO live external calls ([[D-017]], CLAUDE.md "keep the deterministic
+suite free of live external calls").
+
+1. **Harness.** `apps/proxy/src/proxy.e2e.test.ts` (guarded by `RUN_PROXY_E2E=true`; `describe.skip`
+   otherwise, so the normal proxy unit run stays offline). It seeds via the real control-plane
+   services — `PostgresPersonalTenantTransaction.create` (grants the active trial),
+   `PostgresCatalogueRepository.create`+`publish`, and `PostgresPatService.mint` (a real one-time
+   PAT) — starts a `node:http` fake Sculpin that records every inbound request and replies with an
+   OpenAI-shaped JSON body or SSE stream, and boots `createSecureProductionProxyServer` on an
+   ephemeral port. `scripts/run-proxy-e2e.mjs` (root script `test:e2e`) provisions/migrates/drops the
+   ephemeral DB, mirroring `run-db-integration.mjs` but invoking the Prisma binary directly (no pnpm
+   dependency in the runner).
+
+2. **What it proves.** A stock OpenAI client with a real PAT: lists ONLY the published alias (never
+   the agent id); completes a non-streaming chat (upstream body passed through); streams SSE through
+   the SDK's parser; gets 404 for an unknown model and 429 when quota is drained — both WITHOUT any
+   upstream call; and is denied 401 for a bogus PAT. It re-asserts the credential boundary at the
+   network edge: the fake Sculpin sees `Authorization: Bearer <SCULPIN_UPSTREAM_API_KEY>`, the
+   rewritten agent id, and NEITHER the caller's PAT NOR the injected `cookie`/`x-random-header`.
+
+3. **Dependency note.** `openai` is a dev-only dependency used solely by this test; it never enters
+   any app runtime bundle. Pinned exact (repo convention); lockfile updated.
+
+**Scope (deferred):** an HTTP-level provider-double OAuth sign-up E2E (M2 tail) and Azure/ops
+readiness remain M9. This harness is the cross-milestone functional down-payment on M9's "E2E flows".
+
+**Verification:** `test:e2e` → **6/6** green (stock OpenAI SDK, ephemeral PG, fake Sculpin); the suite
+is skipped and offline under the normal proxy unit run (47 pass, 6 skipped); proxy typecheck + lint
+clean. **By:** Stage F implementation pass.
+
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 
 **Decision:** Set `account.accountLinking.enabled = false` in `apps/web/app/lib/auth.ts`. An
@@ -318,6 +355,7 @@ session-authenticated linking flow can be added later. **Date:** 2026-09-17. **B
 review finding (HIGH), auto-applied. Unit-tested in `auth.test.ts`.
 
 **Also from that review (follow-ups):**
+
 - **H-1 (RESOLVED 2026-09-19):** `provider_email` / `email_verified` are now mapped via Better
   Auth `account.additionalFields` and populated in `account.create.before` from the verified ALS
   profile, so the admin-bootstrap decision is backed by the persisted `external_identities` row
@@ -343,6 +381,7 @@ verification` via its adapter. The schema also has **no platform-level role** �
 is org-scoped (owner/member), which is NOT the platform USER/ADMIN the mission requires.
 
 **Decision (recommended for M2 implementation, verify against Better Auth docs during the PR):**
+
 1. Let Better Auth own **`session`** and **`verification`** tables (new). Map its **`user`** to the
    existing `users` table and its **`account`** to `external_identities` via Better Auth field
    mapping — do NOT add `email`/`emailVerified`/`image` columns to `users`; keep
@@ -356,7 +395,7 @@ is org-scoped (owner/member), which is NOT the platform USER/ADMIN the mission r
 3. Add a **platform role** to `users`: enum `{ user, admin }`, default `user`; grant `admin`
    only when the **verified** provider email is in `BOOTSTRAP_ADMIN_EMAILS`, recorded in
    `AuditEvent`. This is distinct from `MembershipRole`.
-**Date:** 2026-09-17. **By:** orchestrator, from codebase inspection. Refines ADR 004 follow-ups.
+   **Date:** 2026-09-17. **By:** orchestrator, from codebase inspection. Refines ADR 004 follow-ups.
 
 ## D-009 — Identity library & session strategy → see ADR 004
 

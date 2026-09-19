@@ -17,6 +17,9 @@ importers:
       eslint:
         specifier: 9.33.0
         version: 9.33.0(jiti@2.7.0)
+      openai:
+        specifier: 7.20.0
+        version: 7.20.0(zod@4.6.5)
       pg:
         specifier: 8.16.3
         version: 8.16.3
@@ -53,6 +56,9 @@ importers:
       '@sculpin/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@sculpin/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@sculpin/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -78,6 +84,9 @@ importers:
       '@sculpin/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@sculpin/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@sculpin/observability':
         specifier: workspace:*
         version: link:../../packages/observability
@@ -1718,6 +1727,30 @@ packages:
   on-exit-leak-free@2.1.2:
     resolution: {integrity: sha512-0eJJY6hXLGf1udHwfNftBqH+g73EU4B504nZeKpz1sYRKafAghwxEJunB2O7rDZkL4PGfsMVnTXZ2EjibbqcsA==}
     engines: {node: '>=14.0.0'}
+
+  openai@7.20.0:
+    resolution: {integrity: sha512-5x5ru4cKEvEqHqYZbdIbT57OE7KqmP9YYxZiUKuKng016grOHXqom1vmu34MTPPW30q+lcP9RhxAbaRse+Xlcw==}
+    engines: {node: '>=22.0.0'}
+    peerDependencies:
+      '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
+      '@smithy/hash-node': '>=4.3.0 <5'
+      '@smithy/signature-v4': '>=5.4.0 <6'
+      undici: '>=5 <9'
+      ws: ^8.21.0
+      zod: ^3.25 || ^4.0
+    peerDependenciesMeta:
+      '@aws-sdk/credential-provider-node':
+        optional: true
+      '@smithy/hash-node':
+        optional: true
+      '@smithy/signature-v4':
+        optional: true
+      undici:
+        optional: true
+      ws:
+        optional: true
+      zod:
+        optional: true
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -3544,6 +3577,10 @@ snapshots:
   ohash@2.0.12: {}
 
   on-exit-leak-free@2.1.2: {}
+
+  openai@7.20.0(zod@4.6.5):
+    optionalDependencies:
+      zod: 4.6.5
 
   optionator@0.9.4:
     dependencies:
