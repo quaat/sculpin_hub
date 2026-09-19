@@ -1,8 +1,8 @@
 # Sculpin Knowledge Hub
 
-Foundation workspace for the Sculpin Knowledge Hub. It provides a public presentation UI, health-aware web/proxy/worker workloads, shared configuration/contracts/logging/database/job seams, local PostgreSQL and Redis, tests, CI, and secure container foundations. **Identity is live (M2):** Google/GitHub OAuth (PKCE, database sessions), atomic personal-tenant provisioning on first sign-in, USER/ADMIN roles, and `BOOTSTRAP_ADMIN_EMAILS` admin bootstrap.
+Foundation workspace for the Sculpin Knowledge Hub. It provides a public presentation UI, health-aware web/proxy/worker workloads, shared configuration/contracts/logging/database/job seams, local PostgreSQL and Redis, tests, CI, and secure container foundations. **The access, subscription, and OpenAI-compatible broker core is live (M2–M7):** Google/GitHub OAuth (PKCE, database sessions) with atomic personal-tenant provisioning and admin bootstrap; an admin catalogue of public model aliases; trial/commercial subscriptions with atomic quota; Personal Access Tokens (mint-once, HMAC keyed digest); and a fail-closed OpenAI-compatible `/v1` broker that authenticates, authorizes, meters, and proxies to Sculpin with centralized upstream-credential injection.
 
-> **Not enabled yet:** subscriptions/entitlements, API tokens (PATs), usage accounting, production Sculpin proxy routes (the `/v1/*` registry is empty and fail-closed), Redis rate enforcement, and Azure infrastructure. All catalog and price content is explicitly illustrative. A **development-only** Sculpin forwarder exists (see below) and is slated for deletion in M6. See [`docs/STATUS.md`](docs/STATUS.md) for the live snapshot.
+> **Not enabled yet:** per-request usage analytics/audit surfaces (the M7 metering tail; atomic quota reservation itself is live), a web UI for PAT and catalogue management, Redis rate enforcement, and Azure infrastructure. All price content is illustrative. See [`docs/STATUS.md`](docs/STATUS.md) for the live snapshot.
 
 ## Prerequisites
 
@@ -46,23 +46,26 @@ pnpm --filter @sculpin/worker dev     # readiness check, then intentionally idle
 pnpm env:smoke                        # verify all workspaces can load root .env (values redacted)
 ```
 
-Web pages: `/`, `/products`, `/pricing`, `/dashboard`, and `/documentation`. Web health is `/api/health/live` and `/api/health/ready`; proxy health is `/health/live` and `/health/ready`. Readiness is `503` when PostgreSQL cannot answer. By default every unregistered proxy `/v1/*` route returns a normalized unsupported-operation response and is never forwarded.
+Web pages: `/`, `/products`, `/pricing`, `/dashboard`, and `/documentation`. Web health is `/api/health/live` and `/api/health/ready`; proxy health is `/health/live` and `/health/ready`. Readiness is `503` when PostgreSQL cannot answer. The proxy registers exactly `GET /v1/models` and `POST /v1/chat/completions`; every other `/v1/*` route returns a normalized unsupported-operation response and is never forwarded.
 
-### Development-only Sculpin forwarding
+## Use the Hub with an OpenAI client
 
-> **Temporary bring-up hack — to be deleted in M6 (Phase A).** This blind forwarder relays the
-> caller's headers verbatim and injects no upstream credential, which violates the fail-closed
-> proxy rules in [`CLAUDE.md`](CLAUDE.md). It is gated to `NODE_ENV=development` and inert in
-> production, and will be replaced by the reviewed fail-closed registry + centralized
-> credential injection. Do not build on it.
+The proxy is an OpenAI-compatible broker. Point any standard OpenAI client at the Hub's `/v1` base URL and authenticate with a Personal Access Token (`sclp_pat_<id>_<secret>`) as `Authorization: Bearer <token>`:
 
-To point the proxy at a local Sculpin instance (for example one exposed over reverse port forwarding), set `SCULPIN_UPSTREAM_URL` in `.env`:
+```ts
+import OpenAI from "openai";
 
-```bash
-SCULPIN_UPSTREAM_URL=http://localhost:3000
+const client = new OpenAI({
+  apiKey: process.env.SCULPIN_HUB_PAT,
+  baseURL: "https://your-hub.example.com/v1",
+});
+const completion = await client.chat.completions.create({
+  model: "support", // a published Hub alias, never an internal agent id
+  messages: [{ role: "user", content: "Hello" }],
+});
 ```
 
-When set **and** `NODE_ENV=development`, the proxy forwards every `/v1`, `/v1/`, and `/v1/*` request to that upstream — relaying method, path, query, headers, and body, and returning the upstream status, headers, and body unchanged. A trusted `x-request-id` is always injected. Leaving the variable empty restores the default unsupported-operation behavior. The value is ignored outside development, so production still forwards nothing.
+The Hub authenticates the PAT, checks an active subscription and atomically reserves quota, resolves the public alias to the upstream agent, injects its own upstream credential (the caller's token/cookies are never forwarded), and streams the response back byte-for-byte when `stream: true`. Deployment configures `SCULPIN_UPSTREAM_URL`, `SCULPIN_UPSTREAM_API_KEY`, and `PAT_HASH_SECRET` (see `.env.example`); the internal Sculpin URL and upstream key are never exposed to clients. See [`/documentation`](apps/web/app/documentation/page.tsx) for the full contract.
 
 ## Validate
 
@@ -72,6 +75,7 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm test:integration                 # requires the Compose PostgreSQL service
+pnpm test:e2e                         # proxy E2E: stock OpenAI SDK + fake Sculpin + ephemeral DB
 pnpm build
 ```
 
@@ -99,7 +103,7 @@ The script verifies non-root image users, web/proxy liveness and PostgreSQL read
 
 Public readiness returns only `ready`/`not_ready` and the service name. Dependency names remain internal to reduce infrastructure disclosure. Redis is not a readiness dependency because no workload uses it yet.
 
-The production Sculpin route registry remains empty. In production `/v1`, `/v1/`, and every unregistered nested `/v1/*` operation return a normalized error and are never forwarded. The only exception is the development-only `SCULPIN_UPSTREAM_URL` passthrough described above, which is inert outside `NODE_ENV=development`.
+The production data plane registers exactly `GET /v1/models` and `POST /v1/chat/completions` through a reviewed route builder; the base route registry itself stays empty (default DENY), so `/v1`, `/v1/`, and every other nested `/v1/*` operation return a normalized error and are never forwarded. All upstream-credential handling is isolated to a single module that injects the Hub credential and strips caller credentials and hop-by-hop headers.
 
 ## Architecture and next work
 
@@ -107,7 +111,7 @@ The production Sculpin route registry remains empty. In production `/v1`, `/v1/`
 - [UI design specification](docs/ui-design-spec.md)
 - [Architecture decisions](docs/adr/)
 
-Identity (M2) is complete and live-verified. The next focused increments follow the phased path in [`docs/NEXT_PHASE_PLAN.md`](docs/NEXT_PHASE_PLAN.md): a safe fail-closed data plane (M6 Phase A, replacing the dev forwarder), PAT authentication (M5), catalogue + minimal entitlement (M3 + thin M4), then metering + atomic quota (M7).
+Identity (M2), the model catalogue (M3), subscriptions/entitlements with atomic quota (M4), Personal Access Tokens (M5), and the fail-closed OpenAI-compatible broker (M6) are implemented and covered by unit, integration, and an end-to-end suite that drives the stock OpenAI SDK against a fake Sculpin (`pnpm test:e2e`). The remaining focused increments are the M7 metering/analytics tail, a web UI for PAT and catalogue management, and Azure deployment (M8). See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) and [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Tenant persistence baseline
 
@@ -131,7 +135,7 @@ Migration tests require PostgreSQL access through `DATABASE_URL`; they create a 
 DATABASE_URL=postgresql://sculpin:password@127.0.0.1:5432/sculpin_hub pnpm db:migration:test
 ```
 
-The tenant persistence baseline implements users, external identities, personal organizations, memberships, append-only audit events, and the transactional outbox. Identity (Google/GitHub OAuth, database sessions, admin bootstrap) is layered on top and live (M2). It intentionally keeps products, plans, subscriptions, API tokens, accounting, public control APIs, Redis enforcement, and Azure infrastructure disabled. Production proxy routes remain unregistered (fail-closed) until a later reviewed branch enables them.
+The tenant persistence baseline implements users, external identities, personal organizations, memberships, append-only audit events, and the transactional outbox. Layered on top and live: identity (Google/GitHub OAuth, database sessions, admin bootstrap — M2), the model catalogue (M3), subscriptions/entitlements with atomic quota (M4), Personal Access Tokens (M5), and the fail-closed OpenAI-compatible `/v1` broker (M6). Still disabled: per-request usage analytics/audit surfaces (M7 tail), Redis enforcement, and Azure infrastructure.
 
 ### ESLint framework rules
 
