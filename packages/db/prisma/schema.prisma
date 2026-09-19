@@ -50,6 +50,14 @@ enum PlatformRole {
   @@map("platform_role")
 }
 
+enum CatalogueEntryStatus {
+  draft
+  published
+  disabled
+
+  @@map("catalogue_entry_status")
+}
+
 model User {
   id                   String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   normalizedEmail      String                   @map("normalized_email") @db.VarChar(254)
@@ -68,6 +76,8 @@ model User {
   personalOrganization Organization?            @relation("PersonalOrganizationOwner")
   auditEvents          AuditEvent[]
   sessions             Session[]
+  catalogueEntriesCreated CatalogueEntry[]      @relation("CatalogueEntryCreatedBy")
+  catalogueEntriesUpdated CatalogueEntry[]      @relation("CatalogueEntryUpdatedBy")
 
   @@index([normalizedEmail], map: "idx_users_normalized_email")
   @@index([status], map: "idx_users_status")
@@ -176,6 +186,29 @@ model OutboxEvent {
 
   @@index([organizationId, aggregateType, aggregateId], map: "idx_outbox_events_org_aggregate")
   @@map("outbox_events")
+}
+
+// M3 model catalogue. Maps a client-visible `public_alias` (the OpenAI `model`
+// id) to an internal Sculpin `upstream_agent_id`. Only `published` rows resolve
+// (fail closed); the upstream agent id is never projected to clients. Admins are
+// recorded via created_by/updated_by for traceability.
+model CatalogueEntry {
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  publicAlias     String               @unique(map: "catalogue_entries_public_alias_key") @map("public_alias") @db.VarChar(64)
+  upstreamAgentId String               @map("upstream_agent_id") @db.VarChar(255)
+  displayName     String               @map("display_name") @db.VarChar(120)
+  description     String?              @db.VarChar(2048)
+  status          CatalogueEntryStatus @default(draft)
+  createdByUserId String?              @map("created_by_user_id") @db.Uuid
+  updatedByUserId String?              @map("updated_by_user_id") @db.Uuid
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version         Int                  @default(1)
+  createdBy       User?                @relation("CatalogueEntryCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  updatedBy       User?                @relation("CatalogueEntryUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([status], map: "idx_catalogue_entries_status")
+  @@map("catalogue_entries")
 }
 
 // Better Auth server-side (database) session. The cookie carries only the

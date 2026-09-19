@@ -56,7 +56,10 @@ export class DomainValidationError extends Error {
 export class DomainConflictError extends Error {
   override readonly name = "DomainConflictError";
   constructor(
-    readonly code: "identity_conflict" | "organization_slug_conflict",
+    readonly code:
+      | "identity_conflict"
+      | "organization_slug_conflict"
+      | "catalogue_alias_conflict",
   ) {
     super(code);
   }
@@ -175,4 +178,108 @@ export interface IdentityRepository {
     provider: string,
     providerSubject: string,
   ): Promise<UserId | undefined>;
+}
+
+// ---------------------------------------------------------------------------
+// M3 — Sculpin model catalogue
+//
+// The Hub publishes a curated map from a CLIENT-VISIBLE `publicAlias` (the
+// OpenAI `model` id a caller sends to `/v1/*`) to an INTERNAL `upstreamAgentId`
+// (the Sculpin agent slug/UUID). The alias is the only identifier ever exposed
+// to clients; the upstream agent id and the internal Sculpin URL are never
+// leaked (CLAUDE.md rules 3-4). Resolution is fail-closed: only a `published`
+// entry maps an alias to its upstream agent id — `draft`/`disabled` entries
+// never resolve. `toPublicModel` is the single projection that clients see; it
+// is defined to structurally omit `upstreamAgentId` so a leak is impossible by
+// construction.
+// ---------------------------------------------------------------------------
+
+export type CatalogueEntryStatus = "draft" | "published" | "disabled";
+
+export interface CatalogueEntryInput {
+  readonly publicAlias: string;
+  readonly upstreamAgentId: string;
+  readonly displayName: string;
+  readonly description?: string;
+}
+
+export interface CatalogueEntry {
+  readonly id: string;
+  readonly publicAlias: string;
+  readonly upstreamAgentId: string;
+  readonly displayName: string;
+  readonly description?: string;
+  readonly status: CatalogueEntryStatus;
+  readonly version: number;
+}
+
+/**
+ * Client-safe projection of a catalogue entry. It deliberately carries NO
+ * `upstreamAgentId` (and no internal ids), so passing it to a client can never
+ * leak the upstream mapping.
+ */
+export interface PublicModel {
+  readonly id: string;
+  readonly displayName: string;
+  readonly description?: string;
+}
+
+const catalogueAliasPattern = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
+const controlCharPattern = /[\p{Cc}\p{Cf}]/u;
+
+export function validateCatalogueEntryInput(input: CatalogueEntryInput): void {
+  if (!catalogueAliasPattern.test(input.publicAlias))
+    throw new DomainValidationError(
+      "Public alias must be 1-64 lower-case characters using a-z, 0-9, dot, hyphen, or underscore and start/end alphanumeric.",
+    );
+  const agentId = input.upstreamAgentId;
+  if (
+    agentId.length < 1 ||
+    agentId.length > 255 ||
+    agentId !== agentId.trim() ||
+    controlCharPattern.test(agentId)
+  )
+    throw new DomainValidationError(
+      "Upstream agent id must be 1-255 trimmed characters with no control characters.",
+    );
+  if (
+    input.displayName.length < 1 ||
+    input.displayName.length > 120 ||
+    !displayNamePattern.test(input.displayName)
+  )
+    throw new DomainValidationError(
+      "Display name must be non-empty and at most 120 characters.",
+    );
+  if (
+    input.description !== undefined &&
+    (input.description.length > 2048 || controlCharPattern.test(input.description))
+  )
+    throw new DomainValidationError(
+      "Description must be at most 2048 characters with no control characters.",
+    );
+}
+
+export function toPublicModel(entry: CatalogueEntry): PublicModel {
+  return {
+    id: entry.publicAlias,
+    displayName: entry.displayName,
+    ...(entry.description !== undefined
+      ? { description: entry.description }
+      : {}),
+  };
+}
+
+export interface CatalogueRepository {
+  create(
+    input: CatalogueEntryInput,
+    adminUserId: UserId,
+  ): Promise<CatalogueEntry>;
+  publish(id: string, adminUserId: UserId): Promise<CatalogueEntry | undefined>;
+  unpublish(
+    id: string,
+    adminUserId: UserId,
+  ): Promise<CatalogueEntry | undefined>;
+  listAll(): Promise<readonly CatalogueEntry[]>;
+  listPublished(): Promise<readonly PublicModel[]>;
+  resolvePublishedAlias(alias: string): Promise<{ upstreamAgentId: string } | undefined>;
 }

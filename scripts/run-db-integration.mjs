@@ -10,6 +10,7 @@ const expectedSuites = new Set([
   "tenant.integration.test.ts",
   "outbox.integration.test.ts",
   "identity.integration.test.ts",
+  "catalogue.integration.test.ts",
 ]);
 
 function quoteIdentifier(value) {

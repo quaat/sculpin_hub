@@ -22,7 +22,7 @@ their acceptance criteria. Live status is in [`STATUS.md`](STATUS.md).
 | M0  | Sculpin upstream discovery → `SCULPIN_INTEGRATION.md` + route policy inputs     | —          | ✅ complete                 |
 | M1  | Durable scaffolding (this doc set, CLAUDE.md, AGENT.md, skills)                 | —          | ✅ complete                 |
 | M2  | Identity & OAuth (Google/GitHub), sessions, roles, admin bootstrap              | M0, M1     | ✅ complete (live-verified) |
-| M3  | Sculpin catalogue: admin-published knowledge bases/agents, public model aliases | M0, M2     | pending                     |
+| M3  | Sculpin catalogue: admin-published knowledge bases/agents, public model aliases | M0, M2     | ✅ core (review pending)     |
 | M4  | Plans & subscriptions (trial + commercial, NO payments), entitlements           | M2, M3     | pending                     |
 | M5  | Personal Access Tokens lifecycle (+ dedicated security review)                  | M2, M4     | pending                     |
 | M6  | OpenAI-compatible proxy / broker (fail-closed registry, streaming)              | M0, M5     | pending                     |

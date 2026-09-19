@@ -20,6 +20,18 @@ export const controlPlaneErrorSchema = z.object({
     requestId: requestIdSchema,
   }),
 });
+// OpenAI-compatible `GET /v1/models` surface. `id` is the Hub's public model
+// alias; the upstream Sculpin agent id is NEVER part of this contract.
+export const modelObjectSchema = z.object({
+  id: z.string().min(1),
+  object: z.literal("model"),
+  created: z.number().int().nonnegative(),
+  owned_by: z.string().min(1),
+});
+export const modelListSchema = z.object({
+  object: z.literal("list"),
+  data: z.array(modelObjectSchema),
+});
 export const openAiErrorSchema = z.object({
   error: z.object({
     message: z.string(),
@@ -30,7 +42,30 @@ export const openAiErrorSchema = z.object({
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export type ReadinessResponse = z.infer<typeof readinessResponseSchema>;
+export type ModelObject = z.infer<typeof modelObjectSchema>;
+export type ModelList = z.infer<typeof modelListSchema>;
 export type OpenAiError = z.infer<typeof openAiErrorSchema>;
+
+export const CATALOGUE_MODEL_OWNER = "sculpin-hub";
+
+/**
+ * Build the OpenAI `GET /v1/models` list body from the Hub's public model
+ * aliases. Only the alias (`id`) is exposed; the upstream agent id is not part
+ * of the input type, so it cannot be serialized here.
+ */
+export function toModelList(
+  models: readonly { id: string; created: number }[],
+): ModelList {
+  return {
+    object: "list",
+    data: models.map((model) => ({
+      id: model.id,
+      object: "model",
+      created: model.created,
+      owned_by: CATALOGUE_MODEL_OWNER,
+    })),
+  };
+}
 export function unsupportedOperation(): OpenAiError {
   return {
     error: {

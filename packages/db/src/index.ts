@@ -10,6 +10,7 @@ export {
   PostgresMembershipRepository,
   PostgresPersonalTenantTransaction,
 } from "./tenant.js";
+export { PostgresCatalogueRepository } from "./catalogue.js";
 
 export type PrismaClientLike = PrismaClient;
 

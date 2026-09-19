@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CreatePersonalTenantService,
   DomainValidationError,
+  toPublicModel,
+  validateCatalogueEntryInput,
   validateCreatePersonalTenantCommand,
+  type CatalogueEntry,
+  type CatalogueEntryInput,
 } from "./index.js";
 
 const valid = {
@@ -57,5 +61,86 @@ describe("personal tenant command validation", () => {
       }),
     ).rejects.toThrow(DomainValidationError);
     expect(tx.create).not.toHaveBeenCalled();
+  });
+});
+
+const validCatalogue: CatalogueEntryInput = {
+  publicAlias: "sculpin-fast",
+  upstreamAgentId: "agent-42",
+  displayName: "Sculpin Fast",
+  description: "A fast Sculpin agent.",
+};
+
+describe("catalogue entry validation", () => {
+  it("accepts a valid input", () =>
+    expect(() => validateCatalogueEntryInput(validCatalogue)).not.toThrow());
+  it("accepts input without a description", () =>
+    expect(() =>
+      validateCatalogueEntryInput({
+        publicAlias: "a",
+        upstreamAgentId: "x",
+        displayName: "A",
+      }),
+    ).not.toThrow());
+  it.each([
+    ["uppercase alias", { publicAlias: "Sculpin" }],
+    ["alias with space", { publicAlias: "sculpin fast" }],
+    ["alias with slash", { publicAlias: "sculpin/fast" }],
+    ["alias starting with dot", { publicAlias: ".sculpin" }],
+    ["empty alias", { publicAlias: "" }],
+    ["empty agent id", { upstreamAgentId: "" }],
+    ["untrimmed agent id", { upstreamAgentId: " agent-42 " }],
+    ["control char in agent id", { upstreamAgentId: "agent\t42" }],
+    ["empty display name", { displayName: "" }],
+    ["blank display name", { displayName: "   " }],
+    ["control char in description", { description: "line\nbreak" }],
+  ])("rejects %s", (_name, patch) =>
+    expect(() =>
+      validateCatalogueEntryInput({ ...validCatalogue, ...patch }),
+    ).toThrow(DomainValidationError),
+  );
+  it("rejects an alias longer than 64 characters", () =>
+    expect(() =>
+      validateCatalogueEntryInput({
+        ...validCatalogue,
+        publicAlias: "a".repeat(65),
+      }),
+    ).toThrow(DomainValidationError));
+});
+
+describe("toPublicModel", () => {
+  const entry: CatalogueEntry = {
+    id: "11111111-1111-4111-8111-111111111111",
+    publicAlias: "sculpin-fast",
+    upstreamAgentId: "internal-secret-agent",
+    displayName: "Sculpin Fast",
+    description: "desc",
+    status: "published",
+    version: 3,
+  };
+  it("exposes only the public alias, name, and description", () => {
+    const model = toPublicModel(entry);
+    expect(model).toEqual({
+      id: "sculpin-fast",
+      displayName: "Sculpin Fast",
+      description: "desc",
+    });
+  });
+  it("never leaks the upstream agent id or internal fields", () => {
+    const serialized = JSON.stringify(toPublicModel(entry));
+    expect(serialized).not.toContain("internal-secret-agent");
+    expect(serialized).not.toContain("upstreamAgentId");
+    expect(Object.keys(toPublicModel(entry)).sort()).toEqual([
+      "description",
+      "displayName",
+      "id",
+    ]);
+  });
+  it("omits description when absent", () => {
+    const { description: _omit, ...withoutDescription } = entry;
+    void _omit;
+    const model = toPublicModel(withoutDescription);
+    expect(model).toEqual({ id: "sculpin-fast", displayName: "Sculpin Fast" });
+    expect("description" in model).toBe(false);
   });
 });

@@ -135,6 +135,43 @@ deploy, status, validate, generate, drift-free diff, SQL invariants) pass. An in
 security review of this slice is required before sign-off (implementer never self-approves).
 **By:** M2 completion pass.
 
+## D-014 — M3 model catalogue: alias→agent map, fail-closed, upstream never leaked
+
+**Decision (2026-09-19):** Implement the M3 catalogue as a platform-global admin resource mapping
+a client-visible `public_alias` (the OpenAI `model` id) to an internal Sculpin `upstream_agent_id`.
+
+1. **Data model** (`catalogue_entries`, migration `20260919160000_catalogue`): `public_alias`
+   (unique, client-facing), `upstream_agent_id` (internal, never projected), `display_name`,
+   `description?`, `status` (`draft`/`published`/`disabled`), `created_by`/`updated_by` (acting
+   admin, for traceability), `version`. Column CHECKs mirror the domain validation (defense in
+   depth). FKs use `ON DELETE RESTRICT` to match the schema-wide convention (drift-free).
+
+2. **Fail-closed resolution.** `resolvePublishedAlias(alias)` returns the upstream agent id ONLY
+   when `status = 'published'`; `draft` and `disabled` never resolve. `publish` → `published`,
+   `unpublish` → `disabled`.
+
+3. **Upstream never leaked (CLAUDE.md rules 3-4).** The client projection is a single function
+   `toPublicModel` / the repository's `listPublished`, both of which structurally omit
+   `upstream_agent_id` (the public SQL query does not even select the column). The api-contracts
+   `toModelList` input type carries only `{ id, created }`, so the OpenAI `/v1/models` body cannot
+   serialize an agent id. Unit + integration tests assert the agent id never appears in any public
+   output.
+
+4. **Admin gating.** `apps/web/app/lib/catalogue.ts` gates every mutation with `requireAdmin`
+   (canonical DB role, per [[D-013]]) BEFORE input validation, and records the acting admin id.
+   Reads of the public model list are intentionally un-gated (aliases only).
+
+**Scope (deferred, not in M3):** no outbox events for catalogue changes (the outbox validator +
+trigger remain scoped to `personal_organization.created`); no platform-level audit table (the
+org-scoped `audit_events` requires an org id and does not fit a global resource) — traceability is
+via `created_by`/`updated_by`/`version`. Proxy consumption of `/v1/models` + alias resolution is
+Stage E (M6). Admin UI is Stage G.
+
+**Verification:** all-package typecheck + lint clean; unit (domain 25, api-contracts 5, db 9, web
+61); DB integration 25 incl. the new `catalogue.integration.test.ts` (6); `db:migration:test`
+drift-free. An independent security review of this slice is required before sign-off.
+**By:** M3 implementation pass.
+
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 
 **Decision:** Set `account.accountLinking.enabled = false` in `apps/web/app/lib/auth.ts`. An

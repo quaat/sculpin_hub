@@ -75,6 +75,15 @@ _Last updated: 2026-09-19_
     degenerate `{}` payload as "payload invalid" (`20260919150000`); added the missing
     `migration_lock.toml`; declared `onUpdate: NoAction` on all relations to match deployed SQL —
     `db:migration:test` (`migrate diff --exit-code`) is now drift-free. See D-013.
+- **M3 (catalogue):** ✅ core implemented (pending independent security review) — D-014.
+  Admin-published `public_alias → upstream_agent_id` map (`catalogue_entries`, migration
+  `20260919160000_catalogue`). Fail-closed resolution: only `published` aliases resolve;
+  `draft`/`disabled` do not. The upstream agent id is never projected to clients — the public
+  path (`toPublicModel`, repository `listPublished`, api-contracts `toModelList`) omits it by
+  construction, asserted by unit + integration tests. Admin mutations gated by `requireAdmin`
+  (canonical DB role) before validation, recording the acting admin. Proxy `/v1/models` +
+  alias resolution wiring is Stage E (M6); admin UI is Stage G. Deferred: no catalogue outbox
+  events / platform-audit table yet (traceability via created_by/updated_by/version).
 
 ## Foundation already in place (from prior branches)
 
