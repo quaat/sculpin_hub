@@ -75,6 +75,16 @@ _Last updated: 2026-09-19_
     degenerate `{}` payload as "payload invalid" (`20260919150000`); added the missing
     `migration_lock.toml`; declared `onUpdate: NoAction` on all relations to match deployed SQL —
     `db:migration:test` (`migrate diff --exit-code`) is now drift-free. See D-013.
+- **M5 (personal access tokens):** ✅ core implemented (pending independent security review) —
+  D-016 / ADR 007. Wire format `sclp_pat_<public-id>_<secret>` (22+43 base62, CSPRNG rejection
+  sampling); only an HMAC-SHA-256 keyed digest of the secret is stored (`personal_access_tokens`,
+  migration `20260920120000_personal_access_tokens`; key `PAT_HASH_SECRET` OUTSIDE the DB). The raw
+  token is shown once and never stored/logged/recoverable; `authenticate` re-derives an active
+  user/org/membership, verifies in constant time, and returns a single opaque failure (dummy HMAC on
+  miss). Control-plane mint/list/revoke gated by `requireUser`, scoped to the caller's personal org
+  (`apps/web/app/lib/pat.ts`). Integration proves the DB holds no usable bearer credential and that
+  revocation/expiry/inactive-owner fail closed. Deferred: `/v1/*` PAT auth in the proxy (M6),
+  per-token usage (M7), admin PAT UI (Stage G), key rotation (future ADR).
 - **M4 (subscriptions/entitlements):** ✅ core implemented (pending independent security review) —
   D-015. Subscription state machine (`active` → `canceled`/`expired`), entitlement as the UNION of
   active in-window subscriptions (`resolveEntitlement`), and a `trial` (quota 200) granted in the
@@ -126,14 +136,17 @@ centralized credential injection in M6/M7 — NOT as an unauthenticated intermed
 - `.claude/settings.local.json` (sandbox read-allow for the read-only Sculpin upstream) is
   local-only and untracked.
 
-## Baseline verification (2026-09-19)
+## Baseline verification (2026-09-20)
 
-- `pnpm install --frozen-lockfile` and `prisma:generate`: OK. `tsc --noEmit` clean for web +
-  proxy. Unit tests green across packages; web package **68/68** under its own config (auth 13,
-  session/authz 13, catalogue 10, entitlement 7, admin-bootstrap 7, provisioning 8, app 5,
-  health 3, next.config 2); domain **46/46**. Integration tests require Compose Postgres (run via
-  `run-db-integration.mjs` with an ephemeral DB; **31/31** including `subscription.integration.
-  test.ts` (6) and `catalogue.integration.test.ts` (6)). `db:migration:test` drift-free.
+- `prisma:generate`: OK. `tsc --noEmit` clean across domain/config/api-contracts/db + web.
+  Unit tests green across packages; web package **77/77** under its own config (auth 13,
+  session/authz 13, catalogue 10, entitlement 7, pat 9, admin-bootstrap 7, provisioning 8, app 5,
+  health 3, next.config 2); domain **63/63** (adds PAT format/name); db **20/20** (index 9, pat 11).
+  Integration tests require Compose Postgres (run via `run-db-integration.mjs` with an ephemeral DB;
+  **37/37**, stable across repeated runs, including `pat.integration.test.ts` (6),
+  `subscription.integration.test.ts` (6), and `catalogue.integration.test.ts` (6)).
+  `db:migration:test` drift-free. Note: the outbox suite now clears `outbox_events` in its
+  `beforeAll` to own the table (fixes a pre-existing cross-suite ordering flake; see D-016).
 - **Env caveat:** the sandbox pins Node to v26 while the repo targets `22.22.2`. `turbo` fails
   with "cannot find package manager binary" until the nvm `v22.22.2/bin` dir is on `PATH`
   (which supplies a real `pnpm` shim); with that prefix the standard `pnpm lint|typecheck|test`

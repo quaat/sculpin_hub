@@ -12,6 +12,12 @@ export {
 } from "./tenant.js";
 export { PostgresCatalogueRepository } from "./catalogue.js";
 export { PostgresSubscriptionRepository } from "./subscription.js";
+export {
+  PostgresPatService,
+  hashPatSecret,
+  verifyPatSecretHash,
+  type MintPatCommand,
+} from "./pat.js";
 
 export type PrismaClientLike = PrismaClient;
 

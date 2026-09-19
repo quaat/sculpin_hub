@@ -12,6 +12,7 @@ const expectedSuites = new Set([
   "identity.integration.test.ts",
   "catalogue.integration.test.ts",
   "subscription.integration.test.ts",
+  "pat.integration.test.ts",
 ]);
 
 function quoteIdentifier(value) {

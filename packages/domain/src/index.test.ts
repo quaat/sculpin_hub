@@ -4,12 +4,18 @@ import {
   canTransitionSubscription,
   CreatePersonalTenantService,
   DomainValidationError,
+  formatPatToken,
   isSubscriptionActive,
+  parsePatToken,
   resolveEntitlement,
   toPublicModel,
   validateCatalogueEntryInput,
   validateCreatePersonalTenantCommand,
+  validatePatName,
   validateQuotaAmount,
+  PAT_PREFIX,
+  PAT_PUBLIC_ID_LENGTH,
+  PAT_SECRET_LENGTH,
   type CatalogueEntry,
   type CatalogueEntryInput,
   type Subscription,
@@ -259,5 +265,59 @@ describe("validateQuotaAmount", () => {
     expect(() => validateQuotaAmount(1)).not.toThrow());
   it.each([0, -1, 1.5, 1001, Number.NaN])("rejects %s", (amount) =>
     expect(() => validateQuotaAmount(amount)).toThrow(DomainValidationError),
+  );
+});
+
+describe("PAT token format", () => {
+  const publicId = "A".repeat(PAT_PUBLIC_ID_LENGTH);
+  const secret = "b".repeat(PAT_SECRET_LENGTH);
+  const token = `${PAT_PREFIX}${publicId}_${secret}`;
+
+  it("round-trips format → parse", () => {
+    expect(formatPatToken(publicId, secret)).toBe(token);
+    expect(parsePatToken(token)).toEqual({ publicId, secret });
+  });
+
+  it("formats only valid parts", () => {
+    expect(() => formatPatToken("short", secret)).toThrow(DomainValidationError);
+    expect(() => formatPatToken(publicId, "short")).toThrow(
+      DomainValidationError,
+    );
+  });
+
+  it.each([
+    ["missing prefix", `${publicId}_${secret}`],
+    ["wrong prefix", `sclp_key_${publicId}_${secret}`],
+    ["no separator", `${PAT_PREFIX}${publicId}${secret}`],
+    ["empty public id", `${PAT_PREFIX}_${secret}`],
+    ["short public id", `${PAT_PREFIX}AAAA_${secret}`],
+    ["short secret", `${PAT_PREFIX}${publicId}_bbbb`],
+    ["non-base62 public id", `${PAT_PREFIX}${"-".repeat(22)}_${secret}`],
+    ["non-base62 secret", `${PAT_PREFIX}${publicId}_${"-".repeat(43)}`],
+    ["empty", ""],
+  ])("rejects %s as undefined (no oracle)", (_label, raw) => {
+    expect(parsePatToken(raw)).toBeUndefined();
+  });
+
+  it("ignores extra underscores in the secret segment only via the first split", () => {
+    // The remainder is split on the FIRST underscore; a secret can't contain
+    // '_' (not base62), so any embedded '_' makes the whole token invalid.
+    expect(parsePatToken(`${PAT_PREFIX}${publicId}_${secret}_extra`)).toBeUndefined();
+  });
+});
+
+describe("validatePatName", () => {
+  it("accepts a printable 1-120 char name", () => {
+    expect(() => validatePatName("My laptop")).not.toThrow();
+    expect(() => validatePatName("x")).not.toThrow();
+    expect(() => validatePatName("y".repeat(120))).not.toThrow();
+  });
+  it.each([
+    ["empty", ""],
+    ["blank", "   "],
+    ["too long", "z".repeat(121)],
+    ["control char", "bad\u0007name"],
+  ])("rejects %s", (_label, name) =>
+    expect(() => validatePatName(name)).toThrow(DomainValidationError),
   );
 });

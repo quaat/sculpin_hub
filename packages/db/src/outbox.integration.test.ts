@@ -15,6 +15,12 @@ suite("outbox concurrency", () => {
   beforeAll(async () => {
     if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required.");
     pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
+    // This suite asserts on the GLOBAL claim ordering, so it must own the table.
+    // Other suites share the same ephemeral database and (in some vitest file
+    // orderings) run first, leaving unclaimed `personal_organization.created`
+    // events with an earlier `available_at`. Clear them so the concurrency
+    // fixtures below are the only claimable rows (hermetic, order-independent).
+    await pool.query("DELETE FROM outbox_events");
     userId = uuid();
     orgId = uuid();
     await pool.query(

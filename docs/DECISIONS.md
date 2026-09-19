@@ -216,6 +216,51 @@ for accounting ([[D-007]]).
 `db:migration:test` drift-free. An independent security review of this slice is required before
 sign-off. **By:** M4 implementation pass.
 
+## D-016 — M5 Personal Access Tokens: mint-once, HMAC keyed digest at rest, constant-time verify
+
+**Decision (2026-09-20):** Implement M5 per CLAUDE.md rule 2 and [`ADR 007`](adr/007-personal-access-tokens.md).
+
+1. **Wire format** `sclp_pat_<public-id>_<secret>`: 22-char base62 public id (~131 bits, an
+   unauthenticated lookup handle, stored cleartext + uniquely indexed) and 43-char base62 secret
+   (~256 bits, the bearer proof). Both from `crypto.randomBytes` with rejection sampling (unbiased
+   base62). Pure domain helpers `parsePatToken`/`formatPatToken`/`validatePatName`; a malformed
+   token parses to `undefined` (no oracle).
+
+2. **At rest** (`personal_access_tokens`, migration `20260920120000_personal_access_tokens`):
+   store ONLY `secret_hash = base64(HMAC-SHA-256(secret, PAT_HASH_SECRET))`; the raw secret is
+   never persisted/logged/recoverable. The key `PAT_HASH_SECRET` lives in validated config
+   (`z.string().min(32).max(512)`), OUTSIDE the DB. Columns: `public_id` (unique), `user_id`/
+   `organization_id` (FK `ON DELETE RESTRICT`), `name`, `secret_hash`, `status`
+   (`active`/`revoked`), `last_used_at?`, `expires_at?`, `revoked_at?`, `version`.
+
+3. **Verify (constant time).** `verifyPatSecretHash` uses `timingSafeEqual`. `authenticate`
+   looks up on `public_id` via a JOIN that re-derives an ACTIVE user + org + membership and an
+   active, unexpired PAT (fail closed), computes an HMAC on EVERY path (dummy digest on miss) so
+   miss and wrong-secret are timing-indistinguishable, returns a single opaque `undefined` on any
+   failure, and touches `last_used_at` only on success.
+
+4. **Lifecycle & scope.** Mint/list/revoke gated by `requireUser`
+   (`apps/web/app/lib/pat.ts`); PATs are scoped to the caller's PERSONAL org (team PATs deferred).
+   The raw token is returned exactly once at mint. `revoke` is owner-scoped and idempotent.
+
+5. **Test isolation fix (not a weakening).** `outbox.integration.test.ts` asserts on GLOBAL claim
+   ordering; because provisioning suites share the ephemeral DB and (under vitest's non-alphabetical
+   file ordering) can run first, they left unclaimed `personal_organization.created` events with an
+   earlier `available_at`. Added a `DELETE FROM outbox_events` in the outbox suite's `beforeAll` so
+   it owns the table — this restores the pre-existing latent flake to determinism (subscription
+   already provisioned at M4; M5 merely made the ordering surface reliably).
+
+**Scope (deferred, not in M5):** the data-plane `/v1/*` authentication that consumes
+`authenticate` lands with the proxy (M6); no PAT-scoped rate limits or per-token usage (M7); no PAT
+admin UI (Stage G); `PAT_HASH_SECRET` rotation (dual-key verify window) is a future ADR.
+
+**Verification:** all-package typecheck + lint clean; unit (domain 63 incl. PAT format/name, web 77
+incl. new `pat.test.ts` 9, db 20 incl. new `pat.test.ts` 11 with a no-token-logging assertion); DB
+integration 37 incl. the new
+`pat.integration.test.ts` (6); `db:migration:test` drift-free; integration stable across repeated
+runs. An independent security review of this slice is required before sign-off. **By:** M5
+implementation pass.
+
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 
 **Decision:** Set `account.accountLinking.enabled = false` in `apps/web/app/lib/auth.ts`. An

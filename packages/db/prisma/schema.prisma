@@ -73,6 +73,13 @@ enum SubscriptionStatus {
   @@map("subscription_status")
 }
 
+enum PatStatus {
+  active
+  revoked
+
+  @@map("pat_status")
+}
+
 model User {
   id                   String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   normalizedEmail      String                   @map("normalized_email") @db.VarChar(254)
@@ -93,6 +100,7 @@ model User {
   sessions             Session[]
   catalogueEntriesCreated CatalogueEntry[]      @relation("CatalogueEntryCreatedBy")
   catalogueEntriesUpdated CatalogueEntry[]      @relation("CatalogueEntryUpdatedBy")
+  personalAccessTokens PersonalAccessToken[]
 
   @@index([normalizedEmail], map: "idx_users_normalized_email")
   @@index([status], map: "idx_users_status")
@@ -137,6 +145,7 @@ model Organization {
   auditEvents         AuditEvent[]
   outboxEvents        OutboxEvent[]
   subscriptions       Subscription[]
+  personalAccessTokens PersonalAccessToken[]
 
   @@unique([personalOwnerUserId], map: "organizations_personal_owner_user_id_key")
   @@index([status], map: "idx_organizations_status")
@@ -249,6 +258,35 @@ model Subscription {
 
   @@index([organizationId, status], map: "idx_subscriptions_org_status")
   @@map("subscriptions")
+}
+
+// M5 Personal Access Token (CLAUDE.md rule 2 / ADR 007). The wire token
+// `sclp_pat_<public_id>_<secret>` is shown ONCE at mint; only an HMAC-SHA-256
+// keyed digest of the secret (`secret_hash`, key `PAT_HASH_SECRET` kept OUTSIDE
+// the DB) is stored, so a DB leak yields no usable bearer credential. `public_id`
+// is the unauthenticated lookup handle (unique); authentication re-derives an
+// active user/org/membership and verifies the secret in constant time. Revocation
+// or expiry flips the row out of the active set. The raw secret is NEVER stored.
+model PersonalAccessToken {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  publicId       String       @unique(map: "personal_access_tokens_public_id_key") @map("public_id") @db.VarChar(64)
+  userId         String       @map("user_id") @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  name           String       @db.VarChar(120)
+  secretHash     String       @map("secret_hash") @db.VarChar(128)
+  status         PatStatus    @default(active)
+  lastUsedAt     DateTime?    @map("last_used_at") @db.Timestamptz(6)
+  expiresAt      DateTime?    @map("expires_at") @db.Timestamptz(6)
+  revokedAt      DateTime?    @map("revoked_at") @db.Timestamptz(6)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version        Int          @default(1)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([userId, status], map: "idx_personal_access_tokens_user_status")
+  @@index([organizationId, status], map: "idx_personal_access_tokens_org_status")
+  @@map("personal_access_tokens")
 }
 
 // Better Auth server-side (database) session. The cookie carries only the

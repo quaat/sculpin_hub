@@ -430,3 +430,94 @@ export interface SubscriptionRepository {
     status: SubscriptionStatus,
   ): Promise<Subscription | undefined>;
 }
+
+// ---------------------------------------------------------------------------
+// M5 — Personal Access Tokens (PATs)
+//
+// Wire format: `sclp_pat_<public-id>_<secret>` (CLAUDE.md rule 2). The public
+// id is an unauthenticated lookup handle; the secret is the bearer proof. Only
+// an HMAC-SHA-256 keyed digest of the secret is ever persisted (see db/pat.ts),
+// so a DB leak yields no usable credentials. These helpers are pure (no crypto,
+// no I/O) so they can run in any layer and stay deterministically testable.
+// ---------------------------------------------------------------------------
+
+export const PAT_PREFIX = "sclp_pat_";
+/** 22 base62 chars ≈ 131 bits — an opaque, unguessable lookup handle. */
+export const PAT_PUBLIC_ID_LENGTH = 22;
+/** 43 base62 chars ≈ 256 bits — the high-entropy bearer secret. */
+export const PAT_SECRET_LENGTH = 43;
+
+const patPublicIdPattern = /^[0-9A-Za-z]{22}$/;
+const patSecretPattern = /^[0-9A-Za-z]{43}$/;
+
+export type PatStatus = "active" | "revoked";
+
+export interface ParsedPatToken {
+  readonly publicId: string;
+  readonly secret: string;
+}
+
+/**
+ * Parse a raw PAT into its public id and secret. Returns `undefined` for any
+ * malformed token — callers MUST treat that identically to an authentication
+ * failure (never branch on the specific reason, to avoid a parsing oracle).
+ */
+export function parsePatToken(raw: string): ParsedPatToken | undefined {
+  if (typeof raw !== "string" || !raw.startsWith(PAT_PREFIX)) return undefined;
+  const remainder = raw.slice(PAT_PREFIX.length);
+  const separator = remainder.indexOf("_");
+  if (separator <= 0) return undefined;
+  const publicId = remainder.slice(0, separator);
+  const secret = remainder.slice(separator + 1);
+  if (!patPublicIdPattern.test(publicId) || !patSecretPattern.test(secret))
+    return undefined;
+  return { publicId, secret };
+}
+
+/** Assemble the one-time display token from its parts. */
+export function formatPatToken(publicId: string, secret: string): string {
+  if (!patPublicIdPattern.test(publicId))
+    throw new DomainValidationError("PAT public id is invalid.");
+  if (!patSecretPattern.test(secret))
+    throw new DomainValidationError("PAT secret is invalid.");
+  return `${PAT_PREFIX}${publicId}_${secret}`;
+}
+
+export function validatePatName(name: string): void {
+  if (typeof name !== "string")
+    throw new DomainValidationError("PAT name is required.");
+  const trimmed = name.trim();
+  if (trimmed.length < 1 || trimmed.length > 120 || controlCharPattern.test(name))
+    throw new DomainValidationError(
+      "PAT name must be 1-120 printable characters.",
+    );
+}
+
+/**
+ * A stored PAT record. NEVER carries the raw secret or its digest — the digest
+ * lives only in the data layer and is never surfaced to callers.
+ */
+export interface PatRecord {
+  readonly id: string;
+  readonly publicId: string;
+  readonly userId: UserId;
+  readonly organizationId: OrganizationId;
+  readonly name: string;
+  readonly status: PatStatus;
+  readonly createdAt: Date;
+  readonly lastUsedAt?: Date;
+  readonly expiresAt?: Date;
+}
+
+/** Resolved caller identity after a successful PAT authentication. */
+export interface PatIdentity {
+  readonly patId: string;
+  readonly userId: UserId;
+  readonly organizationId: OrganizationId;
+}
+
+/** A freshly minted PAT: the record plus the ONE-TIME raw token to display. */
+export interface MintedPat {
+  readonly record: PatRecord;
+  readonly token: string;
+}
