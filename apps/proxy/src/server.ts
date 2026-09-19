@@ -10,7 +10,6 @@ import type { ProxyConfig } from "@sculpin/config";
 import { createDatabase, type Database } from "@sculpin/db";
 import { createLogger } from "@sculpin/observability";
 import { isV1Path, mapProxyError } from "./errors.js";
-import { createForwardHandler } from "./forward.js";
 import {
   emptyProductionRouteRegistry,
   registerRoutes,
@@ -96,13 +95,15 @@ export function createProxyServer(
     });
   });
   registerRoutes(server, dependencies.registry);
-  const v1Handler = config.sculpinUpstreamUrl
-    ? createForwardHandler(config.sculpinUpstreamUrl)
-    : (_request: unknown, reply: FastifyReply) =>
-        reply.code(404).send(unsupportedOperation());
-  server.all("/v1", v1Handler);
-  server.all("/v1/", v1Handler);
-  server.all("/v1/*", v1Handler);
+  // Fail closed: any /v1 path not explicitly registered above is never
+  // forwarded. Registered routes (find-my-way static/param) take precedence
+  // over these wildcards. There is no upstream passthrough — the secure data
+  // plane injects credentials only for reviewed, registered routes (M6).
+  const unsupportedV1 = (_request: unknown, reply: FastifyReply) =>
+    reply.code(404).send(unsupportedOperation());
+  server.all("/v1", unsupportedV1);
+  server.all("/v1/", unsupportedV1);
+  server.all("/v1/*", unsupportedV1);
   server.setErrorHandler((error, request, reply) => {
     const mapped = mapProxyError(error);
     const level = mapped.statusCode >= 500 ? "error" : "warn";

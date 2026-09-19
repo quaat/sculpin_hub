@@ -40,8 +40,24 @@ export interface ProxyConfig extends CommonConfig {
   host: string;
   bodyLimitBytes: number;
   shutdownTimeoutMs: number;
-  /** Development-only Sculpin upstream. Undefined disables /v1 forwarding. */
-  sculpinUpstreamUrl?: string;
+}
+/**
+ * HUB-owned deployment configuration for the secure OpenAI-compatible data
+ * plane (M6/M7) and connection instructions. These are the Hub's OWN names —
+ * the Hub does not adopt Sculpin's internal environment-variable naming as its
+ * public deployment contract.
+ *
+ * `sculpinUpstreamUrl` and `sculpinUpstreamApiKey` are DEPLOYMENT configuration
+ * only: they are never sourced from an HTTP request, catalogue record, ordinary
+ * administrator form, or PAT (SSRF / credential boundary). The API key is the
+ * credential the Hub sends upstream to Sculpin; it never reaches the DB,
+ * browsers, logs, usage events, or responses.
+ */
+export interface DataPlaneConfig {
+  hubPublicUrl: string;
+  sculpinUpstreamUrl: string;
+  sculpinUpstreamApiKey: string;
+  patHashSecret: string;
 }
 export interface WorkerConfig extends CommonConfig {
   shutdownTimeoutMs: number;
@@ -172,15 +188,6 @@ export function parseProxyConfig(input: NodeJS.ProcessEnv): ProxyConfig {
         .min(1000)
         .max(60000)
         .default(10000),
-      SCULPIN_UPSTREAM_URL: z
-        .string()
-        .url()
-        .refine(
-          (value) =>
-            value.startsWith("http://") || value.startsWith("https://"),
-          "must be an http(s) URL",
-        )
-        .optional(),
     })
     .superRefine((value, context) => {
       if (
@@ -203,11 +210,53 @@ export function parseProxyConfig(input: NodeJS.ProcessEnv): ProxyConfig {
     bodyLimitBytes: value.PROXY_BODY_LIMIT_BYTES,
     shutdownTimeoutMs: value.PROXY_SHUTDOWN_TIMEOUT_MS,
   };
-  // Forwarding is a local development affordance only; never active outside it.
-  if (value.NODE_ENV === "development" && value.SCULPIN_UPSTREAM_URL)
-    result.sculpinUpstreamUrl = value.SCULPIN_UPSTREAM_URL;
   assertProductionDatabaseSafety(result);
   return result;
+}
+
+const httpUrl = z
+  .string()
+  .url()
+  .refine(
+    (value) => value.startsWith("http://") || value.startsWith("https://"),
+    "must be an http(s) URL",
+  );
+
+const dataPlaneSchema = z.object({
+  NODE_ENV: environmentSchema.default("development"),
+  // The canonical, public Hub origin used to render connection instructions
+  // (never derived from a request Host header).
+  HUB_PUBLIC_URL: httpUrl,
+  // Deployment-only upstream target. Never sourced from a request/catalogue/PAT.
+  SCULPIN_UPSTREAM_URL: httpUrl,
+  // Server secret the Hub sends to Sculpin as `Authorization: Bearer ...`.
+  SCULPIN_UPSTREAM_API_KEY: z.string().min(1).max(4096),
+  // Keyed HMAC secret for PAT verification, held OUTSIDE the database.
+  PAT_HASH_SECRET: z.string().min(32, "must be at least 32 characters").max(512),
+});
+
+/**
+ * Parse and validate the data-plane deployment configuration. Fails closed:
+ * any missing/invalid required value throws a secret-safe error (field names
+ * only). In production `HUB_PUBLIC_URL` must be a non-local https origin.
+ */
+export function parseDataPlaneConfig(input: NodeJS.ProcessEnv): DataPlaneConfig {
+  const value = parse(dataPlaneSchema, input);
+  if (
+    value.NODE_ENV === "production" &&
+    (value.HUB_PUBLIC_URL.startsWith("http://") ||
+      /localhost|127\.0\.0\.1/.test(value.HUB_PUBLIC_URL))
+  ) {
+    throw new Error(
+      "Invalid runtime configuration. Check: HUB_PUBLIC_URL production safety.",
+    );
+  }
+  return {
+    hubPublicUrl: value.HUB_PUBLIC_URL,
+    sculpinUpstreamUrl: value.SCULPIN_UPSTREAM_URL,
+    sculpinUpstreamApiKey: value.SCULPIN_UPSTREAM_API_KEY,
+    patHashSecret: value.PAT_HASH_SECRET,
+  };
 }
 export function parseWorkerConfig(input: NodeJS.ProcessEnv): WorkerConfig {
   const value = parse(

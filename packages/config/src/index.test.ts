@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseDataPlaneConfig,
   parseProxyConfig,
   parseWebAuthConfig,
   parseWebConfig,
@@ -49,32 +50,6 @@ describe("runtime configuration", () => {
     }
     expect(message).not.toBe("");
     expect(message).not.toContain("canary-secret");
-  });
-  it("enables the Sculpin upstream only in development", () => {
-    expect(
-      parseProxyConfig({
-        ...valid,
-        NODE_ENV: "development",
-        DATABASE_URL: "postgresql://user:pass@localhost:5432/dev",
-        SCULPIN_UPSTREAM_URL: "http://localhost:3990",
-      }).sculpinUpstreamUrl,
-    ).toBe("http://localhost:3990");
-    expect(
-      parseProxyConfig({
-        ...valid,
-        SCULPIN_UPSTREAM_URL: "http://localhost:3990",
-      }).sculpinUpstreamUrl,
-    ).toBeUndefined();
-  });
-  it("rejects a non-http Sculpin upstream", () => {
-    expect(() =>
-      parseProxyConfig({
-        ...valid,
-        NODE_ENV: "development",
-        DATABASE_URL: "postgresql://user:pass@localhost:5432/dev",
-        SCULPIN_UPSTREAM_URL: "ftp://localhost:3990",
-      }),
-    ).toThrow("SCULPIN_UPSTREAM_URL");
   });
   it("requires deliberate production binding", () => {
     expect(() =>
@@ -147,5 +122,70 @@ describe("web auth configuration", () => {
         BETTER_AUTH_URL: "http://hub.example.com",
       }),
     ).toThrow("BETTER_AUTH_URL production safety");
+  });
+});
+
+describe("data-plane configuration", () => {
+  const validDataPlane = {
+    NODE_ENV: "test",
+    HUB_PUBLIC_URL: "http://localhost:3002",
+    SCULPIN_UPSTREAM_URL: "http://sculpin.internal:8001",
+    SCULPIN_UPSTREAM_API_KEY: "sk-upstream-canary-secret",
+    PAT_HASH_SECRET: "unit-test-pat-hash-secret-32chars!!!",
+  };
+  it("parses a complete data-plane environment", () => {
+    const config = parseDataPlaneConfig(validDataPlane);
+    expect(config.hubPublicUrl).toBe("http://localhost:3002");
+    expect(config.sculpinUpstreamUrl).toBe("http://sculpin.internal:8001");
+    expect(config.sculpinUpstreamApiKey).toBe("sk-upstream-canary-secret");
+    expect(config.patHashSecret).toBe("unit-test-pat-hash-secret-32chars!!!");
+  });
+  it("fails closed when the upstream key is missing", () => {
+    const rest = { ...validDataPlane };
+    delete (rest as Record<string, string>).SCULPIN_UPSTREAM_API_KEY;
+    expect(() => parseDataPlaneConfig(rest)).toThrow("SCULPIN_UPSTREAM_API_KEY");
+  });
+  it("rejects a short PAT hash secret", () => {
+    expect(() =>
+      parseDataPlaneConfig({ ...validDataPlane, PAT_HASH_SECRET: "too-short" }),
+    ).toThrow("PAT_HASH_SECRET");
+  });
+  it("rejects a non-http Sculpin upstream URL", () => {
+    expect(() =>
+      parseDataPlaneConfig({
+        ...validDataPlane,
+        SCULPIN_UPSTREAM_URL: "ftp://sculpin.internal",
+      }),
+    ).toThrow("SCULPIN_UPSTREAM_URL");
+  });
+  it("requires a secure non-local public URL in production", () => {
+    expect(() =>
+      parseDataPlaneConfig({
+        ...validDataPlane,
+        NODE_ENV: "production",
+        HUB_PUBLIC_URL: "http://localhost:3002",
+      }),
+    ).toThrow("HUB_PUBLIC_URL production safety");
+    expect(
+      parseDataPlaneConfig({
+        ...validDataPlane,
+        NODE_ENV: "production",
+        HUB_PUBLIC_URL: "https://hub.example.com",
+      }).hubPublicUrl,
+    ).toBe("https://hub.example.com");
+  });
+  it("does not echo secret values in errors", () => {
+    let message = "";
+    try {
+      parseDataPlaneConfig({
+        ...validDataPlane,
+        HUB_PUBLIC_URL: "not a url",
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("HUB_PUBLIC_URL");
+    expect(message).not.toContain(validDataPlane.SCULPIN_UPSTREAM_API_KEY);
+    expect(message).not.toContain(validDataPlane.PAT_HASH_SECRET);
   });
 });

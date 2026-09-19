@@ -68,34 +68,24 @@ describe("proxy foundation", () => {
     });
     await server.close();
   });
-  it("forwards v1 operations to a configured upstream", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: "cmpl-1" }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+  it("never forwards an unregistered v1 route to any upstream", async () => {
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     try {
-      const server = createProxyServer(
-        { ...config, sculpinUpstreamUrl: "http://localhost:3990" },
-        { database: database(), registry: emptyProductionRouteRegistry() },
-      );
+      const server = createProxyServer(config, {
+        database: database(),
+        registry: emptyProductionRouteRegistry(),
+      });
       const response = await server.inject({
         method: "POST",
         url: "/v1/chat/completions",
         payload: { model: "claude-opus-5" },
       });
-      expect(fetchMock).toHaveBeenCalledOnce();
-      const [target, init] = fetchMock.mock.calls[0] as [
-        string,
-        { method: string; body: string },
-      ];
-      expect(target).toBe("http://localhost:3990/v1/chat/completions");
-      expect(init.method).toBe("POST");
-      expect(JSON.parse(init.body)).toEqual({ model: "claude-opus-5" });
-      expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual({ id: "cmpl-1" });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(response.statusCode).toBe(404);
+      expect(openAiErrorSchema.parse(response.json()).error.code).toBe(
+        "unsupported_operation",
+      );
       await server.close();
     } finally {
       vi.unstubAllGlobals();
