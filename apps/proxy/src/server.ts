@@ -6,9 +6,13 @@ import Fastify, {
 } from "fastify";
 import type { Logger } from "pino";
 import { requestIdSchema, unsupportedOperation } from "@sculpin/api-contracts";
-import type { ProxyConfig } from "@sculpin/config";
+import type { DataPlaneConfig, ProxyConfig } from "@sculpin/config";
 import { createDatabase, type Database } from "@sculpin/db";
 import { createLogger } from "@sculpin/observability";
+import {
+  createDataPlaneRouteRegistry,
+  createDataPlaneServices,
+} from "./data-plane.js";
 import { isV1Path, mapProxyError } from "./errors.js";
 import {
   emptyProductionRouteRegistry,
@@ -133,4 +137,35 @@ export function createProductionProxyServer(
     registry: emptyProductionRouteRegistry(),
     ...(database ? { database } : {}),
   });
+}
+/**
+ * Production data plane (M6/M7): default-DENY registry populated by reviewed
+ * code with EXACTLY `GET /v1/models` and `POST /v1/chat/completions`. The data
+ * plane and the readiness probe share one database pool. The upstream URL/key
+ * are consumed only inside the centralized upstream module.
+ */
+export function createSecureProductionProxyServer(
+  config: ProxyConfig,
+  dataPlaneConfig: DataPlaneConfig,
+  database?: Database,
+): FastifyInstance {
+  const logger = createLogger({
+    service: "proxy",
+    environment: config.environment,
+    level: config.logLevel,
+  });
+  const ownsDatabase = database === undefined;
+  const db =
+    database ??
+    createDatabase(config.databaseUrl, {
+      onPoolError: (error) => logger.error({ err: error }, "database pool error"),
+    });
+  const services = createDataPlaneServices(db.pool, dataPlaneConfig);
+  const server = createProxyServer(config, {
+    database: db,
+    registry: createDataPlaneRouteRegistry(services),
+    logger,
+  });
+  if (ownsDatabase) server.addHook("onClose", () => db.close());
+  return server;
 }

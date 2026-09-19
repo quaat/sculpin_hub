@@ -1,0 +1,212 @@
+import { Readable } from "node:stream";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
+import type { FastifyReply, FastifyRequest } from "fastify";
+import {
+  authenticationError,
+  chatCompletionRequestSchema,
+  insufficientQuotaError,
+  invalidRequestBodyError,
+  modelNotFoundError,
+  noActiveSubscriptionError,
+  toModelList,
+  upstreamUnavailableError,
+} from "@sculpin/api-contracts";
+import type { DataPlaneConfig } from "@sculpin/config";
+import {
+  PostgresCatalogueRepository,
+  PostgresPatService,
+  PostgresSubscriptionRepository,
+  type Database,
+} from "@sculpin/db";
+import {
+  resolveEntitlement,
+  type Entitlement,
+  type PatIdentity,
+  type QuotaReservation,
+} from "@sculpin/domain";
+import type { RouteRegistry } from "./registry.js";
+
+type Pool = Database["pool"];
+import {
+  createSculpinUpstream,
+  forwardableResponseHeaders,
+  type FetchLike,
+  type SculpinUpstream,
+} from "./upstream.js";
+
+/**
+ * The secure data-plane pipeline (M6/M7). Every dependency is an interface so
+ * unit tests run without a database or a live upstream. Nothing here reads the
+ * upstream URL/key directly — that boundary lives only in `upstream.ts`.
+ */
+export interface DataPlaneServices {
+  authenticate(token: string): Promise<PatIdentity | undefined>;
+  resolveEntitlement(organizationId: string): Promise<Entitlement>;
+  reserveQuota(
+    organizationId: string,
+    amount: number,
+  ): Promise<QuotaReservation>;
+  listPublishedModels(): Promise<readonly { id: string; created: number }[]>;
+  resolvePublishedAlias(
+    alias: string,
+  ): Promise<{ upstreamAgentId: string } | undefined>;
+  readonly upstream: SculpinUpstream;
+}
+
+export interface DataPlaneDeps {
+  readonly fetch?: FetchLike;
+  readonly now?: () => Date;
+}
+
+/** Each accepted chat completion reserves exactly one request-quota unit. */
+const CHAT_QUOTA_COST = 1;
+
+/**
+ * Extract a bearer token from an `Authorization` header. Accepts the standard
+ * `Bearer <token>` scheme (case-insensitive) and, as a fallback, a bare token.
+ * Authentication treats any malformed value as a failure, so this never leaks a
+ * parsing oracle.
+ */
+export function extractBearerToken(
+  header: string | string[] | undefined,
+): string | undefined {
+  const value = Array.isArray(header) ? header[0] : header;
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  const trimmed = value.trim();
+  const match = /^Bearer\s+(.+)$/i.exec(trimmed);
+  return (match?.[1] ?? trimmed).trim();
+}
+
+export function createDataPlaneServices(
+  pool: Pool,
+  config: DataPlaneConfig,
+  deps: DataPlaneDeps = {},
+): DataPlaneServices {
+  const pat = new PostgresPatService(pool, config.patHashSecret);
+  const catalogue = new PostgresCatalogueRepository(pool);
+  const subscriptions = new PostgresSubscriptionRepository(pool);
+  const upstream = createSculpinUpstream(config, deps.fetch);
+  const now = deps.now ?? (() => new Date());
+  return {
+    authenticate: (token) => pat.authenticate(token),
+    async resolveEntitlement(organizationId) {
+      const subs = await subscriptions.listForOrganization(organizationId);
+      return resolveEntitlement(organizationId, subs, now());
+    },
+    reserveQuota: (organizationId, amount) =>
+      subscriptions.reserveQuota(organizationId, amount),
+    listPublishedModels: () => catalogue.listPublishedModels(),
+    resolvePublishedAlias: (alias) => catalogue.resolvePublishedAlias(alias),
+    upstream,
+  };
+}
+
+async function authenticateRequest(
+  services: DataPlaneServices,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<PatIdentity | undefined> {
+  const token = extractBearerToken(request.headers.authorization);
+  const identity = token ? await services.authenticate(token) : undefined;
+  if (!identity) {
+    // Single opaque failure; never reveal whether the token was malformed,
+    // unknown, revoked, expired, or wrong-secret.
+    void reply
+      .code(401)
+      .header("www-authenticate", "Bearer")
+      .send(authenticationError());
+    return undefined;
+  }
+  return identity;
+}
+
+function handleModels(services: DataPlaneServices) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const identity = await authenticateRequest(services, request, reply);
+    if (!identity) return reply;
+    const entitlement = await services.resolveEntitlement(
+      identity.organizationId,
+    );
+    if (!entitlement.active)
+      return reply.code(403).send(noActiveSubscriptionError());
+    // Listing exposes ONLY published public aliases; the upstream agent id is
+    // never part of this projection (see catalogue.listPublishedModels).
+    return reply.code(200).send(toModelList(await services.listPublishedModels()));
+  };
+}
+
+function handleChatCompletions(services: DataPlaneServices) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const identity = await authenticateRequest(services, request, reply);
+    if (!identity) return reply;
+    const parsed = chatCompletionRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send(invalidRequestBodyError());
+    const entitlement = await services.resolveEntitlement(
+      identity.organizationId,
+    );
+    if (!entitlement.active)
+      return reply.code(403).send(noActiveSubscriptionError());
+    // Resolve alias -> upstream agent BEFORE reserving quota so an unknown model
+    // never burns a caller's budget. Only PUBLISHED aliases resolve.
+    const resolved = await services.resolvePublishedAlias(parsed.data.model);
+    if (!resolved) return reply.code(404).send(modelNotFoundError());
+    // Atomic reservation (CLAUDE.md rule 6). Fail closed: no upstream call when
+    // the tenant is out of quota. A subsequent upstream failure does not refund
+    // the unit (v1 accounting is best-effort; usage counts are not billed).
+    const reservation = await services.reserveQuota(
+      identity.organizationId,
+      CHAT_QUOTA_COST,
+    );
+    if (!reservation.granted)
+      return reply.code(429).send(insufficientQuotaError());
+    // Rewrite the public alias to the upstream agent id; all other client fields
+    // pass through so sampling controls still reach Sculpin.
+    const upstreamPayload = { ...parsed.data, model: resolved.upstreamAgentId };
+    const controller = new AbortController();
+    // Propagate client disconnects so the upstream run is cancelled and the
+    // stream is not buffered.
+    request.raw.on("close", () => controller.abort());
+    let upstreamResponse: Response;
+    try {
+      upstreamResponse = await services.upstream.chatCompletions(
+        upstreamPayload,
+        { requestHeaders: request.headers, signal: controller.signal },
+      );
+    } catch {
+      // Never leak the internal URL, the key, or the underlying error.
+      return reply.code(502).send(upstreamUnavailableError());
+    }
+    reply.code(upstreamResponse.status);
+    for (const [name, value] of Object.entries(
+      forwardableResponseHeaders(upstreamResponse.headers),
+    ))
+      reply.header(name, value);
+    if (!upstreamResponse.body) return reply.send();
+    // Byte-for-byte passthrough (JSON or SSE): pipe the upstream body straight
+    // through without re-serialization or buffering.
+    return reply.send(
+      Readable.fromWeb(upstreamResponse.body as WebReadableStream<Uint8Array>),
+    );
+  };
+}
+
+/**
+ * Build the reviewed production route registry. This is the ONLY code that adds
+ * routes to the default-DENY data plane, and it registers EXACTLY the two
+ * OpenAI-compatible operations the Hub supports (CLAUDE.md rule 1). Routes are
+ * never selected from environment or client input.
+ */
+export function createDataPlaneRouteRegistry(
+  services: DataPlaneServices,
+): RouteRegistry {
+  return {
+    routes: [
+      { method: "GET", path: "/v1/models", handler: handleModels(services) },
+      {
+        method: "POST",
+        path: "/v1/chat/completions",
+        handler: handleChatCompletions(services),
+      },
+    ],
+  };
+}

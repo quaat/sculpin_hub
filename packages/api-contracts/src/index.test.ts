@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  authenticationError,
   CATALOGUE_MODEL_OWNER,
+  chatCompletionRequestSchema,
+  insufficientQuotaError,
   internalProxyError,
+  invalidRequestBodyError,
   modelListSchema,
+  modelNotFoundError,
+  noActiveSubscriptionError,
   openAiErrorSchema,
   requestIdSchema,
   proxyClientError,
   toModelList,
   unsupportedOperation,
+  upstreamUnavailableError,
 } from "./index.js";
 describe("API contracts", () => {
   it("validates request IDs", () => {
@@ -44,5 +51,44 @@ describe("API contracts", () => {
       toModelList([{ id: "sculpin-fast", created: 1 }]),
     );
     expect(serialized).not.toMatch(/agent|upstream/i);
+  });
+  it("keeps every data-plane error OpenAI-shaped with a stable code", () => {
+    const cases: [ReturnType<typeof authenticationError>, string][] = [
+      [authenticationError(), "invalid_api_key"],
+      [modelNotFoundError(), "model_not_found"],
+      [noActiveSubscriptionError(), "no_active_subscription"],
+      [insufficientQuotaError(), "insufficient_quota"],
+      [upstreamUnavailableError(), "upstream_unavailable"],
+      [invalidRequestBodyError(), "invalid_request"],
+    ];
+    for (const [body, code] of cases) {
+      expect(openAiErrorSchema.parse(body).error.code).toBe(code);
+      // No internal detail leaks through any error surface.
+      expect(JSON.stringify(body)).not.toMatch(/stack|sculpin|upstream:|http/i);
+    }
+  });
+  it("validates chat completions request essentials and passes extra fields through", () => {
+    const ok = chatCompletionRequestSchema.safeParse({
+      model: "support",
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 0.7,
+      stream: true,
+    });
+    expect(ok.success).toBe(true);
+    if (ok.success) {
+      expect(ok.data.model).toBe("support");
+      // Unknown sampling fields survive (passthrough) so upstream still sees them.
+      expect((ok.data as { temperature?: number }).temperature).toBe(0.7);
+    }
+    expect(chatCompletionRequestSchema.safeParse({ messages: [] }).success).toBe(
+      false,
+    );
+    expect(
+      chatCompletionRequestSchema.safeParse({ model: "m", messages: [] })
+        .success,
+    ).toBe(false);
+    expect(chatCompletionRequestSchema.safeParse({ model: "m" }).success).toBe(
+      false,
+    );
   });
 });

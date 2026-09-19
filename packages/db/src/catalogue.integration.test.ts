@@ -111,6 +111,20 @@ suite("catalogue repository", () => {
     expect(ids).not.toContain("sculpin-temp");
   });
 
+  it("exposes only published aliases with a created timestamp to the proxy, never the upstream id", async () => {
+    const models = await repository.listPublishedModels();
+    const ids = models.map((m) => m.id);
+    expect(ids).toContain("sculpin-pro");
+    expect(ids).not.toContain("sculpin-fast");
+    expect(ids).not.toContain("sculpin-temp");
+    for (const model of models) {
+      expect(Object.keys(model).sort()).toEqual(["created", "id"]);
+      expect(Number.isInteger(model.created)).toBe(true);
+      expect(model.created).toBeGreaterThan(0);
+    }
+    expect(JSON.stringify(models)).not.toMatch(/internal-agent/);
+  });
+
   it("returns undefined when publishing a non-existent entry", async () => {
     const missing = await repository.publish(
       "00000000-0000-4000-8000-000000000000",

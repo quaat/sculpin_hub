@@ -107,3 +107,78 @@ export function proxyClientError(code: ProxyClientErrorCode): OpenAiError {
     },
   };
 }
+// Data-plane (M6) OpenAI-shaped errors. Every failure returns a single opaque
+// body: no reason leaks the caller's identity, the entitlement state, or any
+// upstream detail beyond the OpenAI-standard code. The internal Sculpin URL and
+// upstream credential NEVER appear in any of these shapes.
+export function authenticationError(): OpenAiError {
+  return {
+    error: {
+      message: "The provided API key is invalid, revoked, or expired.",
+      type: "invalid_request_error",
+      param: null,
+      code: "invalid_api_key",
+    },
+  };
+}
+export function modelNotFoundError(): OpenAiError {
+  return {
+    error: {
+      message: "The requested model does not exist or is not available.",
+      type: "invalid_request_error",
+      param: "model",
+      code: "model_not_found",
+    },
+  };
+}
+export function noActiveSubscriptionError(): OpenAiError {
+  return {
+    error: {
+      message: "An active subscription is required to use this API.",
+      type: "invalid_request_error",
+      param: null,
+      code: "no_active_subscription",
+    },
+  };
+}
+export function insufficientQuotaError(): OpenAiError {
+  return {
+    error: {
+      message: "You have exceeded your current request quota.",
+      type: "insufficient_quota",
+      param: null,
+      code: "insufficient_quota",
+    },
+  };
+}
+export function upstreamUnavailableError(): OpenAiError {
+  return {
+    error: {
+      message: "The upstream service is temporarily unavailable.",
+      type: "api_error",
+      param: null,
+      code: "upstream_unavailable",
+    },
+  };
+}
+export function invalidRequestBodyError(): OpenAiError {
+  return {
+    error: {
+      message: "The request must include a model and at least one message.",
+      type: "invalid_request_error",
+      param: null,
+      code: "invalid_request",
+    },
+  };
+}
+// Minimal validation of the OpenAI chat-completions request. Only the fields the
+// Hub needs are constrained (`model`, `messages`, `stream`); all other fields
+// pass through untouched so upstream sampling controls still reach Sculpin.
+export const chatCompletionRequestSchema = z
+  .object({
+    model: z.string().min(1).max(256),
+    messages: z.array(z.unknown()).min(1),
+    stream: z.boolean().optional(),
+  })
+  .passthrough();
+export type ChatCompletionRequest = z.infer<typeof chatCompletionRequestSchema>;

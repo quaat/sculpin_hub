@@ -261,6 +261,49 @@ integration 37 incl. the new
 runs. An independent security review of this slice is required before sign-off. **By:** M5
 implementation pass.
 
+## D-017 — M6/M7 secure data plane: reviewed fail-closed registry, centralized credential boundary
+
+**Decision (2026-09-20):** Build the production `/v1/*` data plane as a reviewed route registry that
+registers EXACTLY the two OpenAI-compatible operations the Hub supports, with all upstream-credential
+handling isolated to a single module. This resolves Phase A/B/D of the "next up" slice ([[D-006]],
+[[D-008]], [[D-014]], [[D-015]], [[D-016]]).
+
+1. **Default DENY preserved (CLAUDE.md rule 1).** `apps/proxy/src/registry.ts` stays empty; routes
+   are added ONLY by the reviewed `createDataPlaneRouteRegistry` in `apps/proxy/src/data-plane.ts`,
+   which registers `GET /v1/models` + `POST /v1/chat/completions` and nothing else. Routes are never
+   selected from env or client input; every other `/v1/*` path stays fail-closed → 404.
+
+2. **Centralized credential boundary (CLAUDE.md rules 3-4).** `apps/proxy/src/upstream.ts` is the
+   ONLY code that reads `SCULPIN_UPSTREAM_URL`/`SCULPIN_UPSTREAM_API_KEY`. It strips the caller's
+   `Authorization`/`cookie`/`proxy-authorization` and all hop-by-hop headers, forwards only a small
+   request-header allowlist (`x-exodus-conversation-id`, `x-agent-platform-include-metadata`), and
+   injects `Authorization: Bearer ${SCULPIN_UPSTREAM_API_KEY}`. Responses are projected onto a
+   caller-safe header allowlist (drops `set-cookie`, `server`, internal headers). The internal URL/key
+   never touch logs, response bodies, or error pages.
+
+3. **Fail-closed pipeline order.** authenticate PAT (single opaque 401, [[D-016]]) → validate body
+   (400) → entitlement active (403, [[D-015]]) → resolve PUBLISHED alias→agent (404 BEFORE quota, so
+   an unknown model never burns budget, [[D-014]]) → atomic `reserveQuota` (429 BEFORE any upstream
+   call, [[D-015]] rule 6) → rewrite `model` to the upstream agent id → call upstream → byte-for-byte
+   passthrough (JSON or SSE) via `Readable.fromWeb`, propagating client disconnect to an
+   `AbortController`. Any upstream throw → opaque 502 with no internal detail.
+
+4. **`/v1/models` serves the Hub catalogue, not the upstream.** `listPublishedModels` selects only
+   `public_alias` + `created_at` (never `upstream_agent_id`) and feeds `toModelList`, so the OpenAI
+   models body cannot serialize an internal agent id.
+
+**Scope (deferred, not in M6):** per-token/per-request usage events + analytics surfaces (the M7
+metering tail) are not yet wired; the upstream base is a fixed deployment value (no private-range
+SSRF guard by design — no client-influenced target); best-effort accounting does not refund a unit on
+a subsequent upstream failure (v1 usage is not billed).
+
+**Verification:** proxy typecheck + lint clean; proxy unit 47 (new `data-plane.test.ts` 12 +
+`upstream.test.ts` 4) incl. an end-to-end test that wires the REAL upstream module through a fetch spy
+and proves the caller PAT/cookie never reach the outbound request; api-contracts 7; db unit 20; DB
+integration 38 (adds a catalogue `listPublishedModels` projection test); the concurrent last-unit
+quota race is covered by `subscription.integration.test.ts`. **Independent opus security review:
+PASS** (0 blocking, 0 major, 5 minor/by-design). **By:** M6/M7 implementation pass.
+
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 
 **Decision:** Set `account.accountLinking.enabled = false` in `apps/web/app/lib/auth.ts`. An

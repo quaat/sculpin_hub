@@ -125,6 +125,28 @@ export class PostgresCatalogueRepository implements CatalogueRepository {
     }));
   }
 
+  /**
+   * Proxy-facing projection of published models for the OpenAI `GET /v1/models`
+   * surface. Selects ONLY the public alias and a creation timestamp — never
+   * `upstream_agent_id` — so the data plane can never leak the upstream mapping.
+   * `created` is unix seconds, as OpenAI clients expect.
+   */
+  async listPublishedModels(): Promise<
+    readonly { id: string; created: number }[]
+  > {
+    const result = await this.pool.query<{
+      publicAlias: string;
+      createdAt: Date;
+    }>(
+      `SELECT public_alias AS "publicAlias", created_at AS "createdAt"
+       FROM catalogue_entries WHERE status='published' ORDER BY public_alias`,
+    );
+    return result.rows.map((row) => ({
+      id: row.publicAlias,
+      created: Math.floor(row.createdAt.getTime() / 1000),
+    }));
+  }
+
   async resolvePublishedAlias(
     alias: string,
   ): Promise<{ upstreamAgentId: string } | undefined> {

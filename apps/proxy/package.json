@@ -16,6 +16,7 @@
     "@sculpin/api-contracts": "workspace:*",
     "@sculpin/config": "workspace:*",
     "@sculpin/db": "workspace:*",
+    "@sculpin/domain": "workspace:*",
     "@sculpin/observability": "workspace:*",
     "fastify": "5.5.0",
     "pino": "9.9.0"

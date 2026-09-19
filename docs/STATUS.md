@@ -3,9 +3,26 @@
 Live snapshot of where the project is. Update as milestones progress. Milestone definitions and
 acceptance criteria are in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
 
-_Last updated: 2026-09-19_
+_Last updated: 2026-09-20_
 
 ## Current focus
+
+- **M6 (OpenAI-compatible proxy / broker):** ✅ core implemented, **independent security review
+  PASS** — D-017. The production data plane registers EXACTLY `GET /v1/models` +
+  `POST /v1/chat/completions` via the reviewed `createDataPlaneRouteRegistry`
+  (`apps/proxy/src/data-plane.ts`); the fail-closed `registry.ts` stays empty (CLAUDE.md rule 1).
+  Upstream-credential handling is isolated to `apps/proxy/src/upstream.ts` (the only reader of
+  `SCULPIN_UPSTREAM_URL`/`_API_KEY`): it strips caller `Authorization`/cookies/hop-by-hop, forwards a
+  tiny request-header allowlist, injects `Authorization: Bearer ${SCULPIN_UPSTREAM_API_KEY}`, and
+  projects responses onto a caller-safe allowlist (rules 3-4). Pipeline fails closed in order:
+  PAT auth (opaque 401) → body validate (400) → entitlement (403) → PUBLISHED alias→agent (404 before
+  quota) → atomic `reserveQuota` (429 before any upstream call) → alias rewritten to the agent id →
+  byte-for-byte JSON/SSE passthrough with client-disconnect abort → opaque 502 on upstream failure.
+  `/v1/models` serves ONLY Hub published aliases (`listPublishedModels`, never the upstream id).
+  `createSecureProductionProxyServer` wires it in `main.ts`.
+- **M7 (usage metering / quota):** ⏳ partial — atomic quota reservation is live and enforced in the
+  proxy pipeline (D-015/D-017, concurrent last-unit race tested); per-request usage events +
+  analytics/audit surfaces are the remaining M7 tail.
 
 - **M0 (Sculpin discovery):** ✅ complete — [`SCULPIN_INTEGRATION.md`](SCULPIN_INTEGRATION.md)
   written from source-only investigation of the read-only upstream. Key findings:
@@ -118,9 +135,12 @@ _Last updated: 2026-09-19_
 
 ## Explicitly NOT enabled yet
 
-Subscriptions/entitlements, PATs, usage accounting, production proxy routes (fail-closed
-registry still empty), Redis enforcement, Azure infra. (Authentication, OAuth callbacks,
-sessions, and admin bootstrap are now live per M2.)
+Per-request usage accounting/analytics (M7 tail), Redis enforcement, Azure infra. (Authentication,
+OAuth callbacks, sessions, and admin bootstrap are live per M2; catalogue/subscriptions/PATs per
+M3/M4/M5; the production `/v1/models` + `/v1/chat/completions` broker with PAT auth, entitlement +
+atomic quota gating, and centralized upstream-credential injection is live per M6/D-017. The
+`registry.ts` default-DENY list itself remains empty — routes are added only via the reviewed
+`createDataPlaneRouteRegistry`.)
 
 **✅ Dev-only blind forwarder DELETED (Stage A):** the temporary `apps/proxy/src/forward.ts`
 bring-up hack (which forwarded caller headers verbatim to `SCULPIN_UPSTREAM_URL` without
@@ -138,13 +158,16 @@ centralized credential injection in M6/M7 — NOT as an unauthenticated intermed
 
 ## Baseline verification (2026-09-20)
 
-- `prisma:generate`: OK. `tsc --noEmit` clean across domain/config/api-contracts/db + web.
+- `prisma:generate`: OK. `tsc --noEmit` clean across domain/config/api-contracts/db + web + proxy.
   Unit tests green across packages; web package **77/77** under its own config (auth 13,
   session/authz 13, catalogue 10, entitlement 7, pat 9, admin-bootstrap 7, provisioning 8, app 5,
-  health 3, next.config 2); domain **63/63** (adds PAT format/name); db **20/20** (index 9, pat 11).
+  health 3, next.config 2); domain **63/63** (adds PAT format/name); db **20/20** (index 9, pat 11);
+  api-contracts **7/7** (adds the M6 data-plane error builders + chat schema); proxy **47/47**
+  (data-plane 12, server 20, errors 8, upstream 4, shutdown 3).
   Integration tests require Compose Postgres (run via `run-db-integration.mjs` with an ephemeral DB;
-  **37/37**, stable across repeated runs, including `pat.integration.test.ts` (6),
-  `subscription.integration.test.ts` (6), and `catalogue.integration.test.ts` (6)).
+  **38/38**, stable across repeated runs, including `pat.integration.test.ts` (6),
+  `subscription.integration.test.ts` (6, incl. the concurrent last-unit quota race), and
+  `catalogue.integration.test.ts` (7, adds the `listPublishedModels` proxy-projection test)).
   `db:migration:test` drift-free. Note: the outbox suite now clears `outbox_events` in its
   `beforeAll` to own the table (fixes a pre-existing cross-suite ordering flake; see D-016).
 - **Env caveat:** the sandbox pins Node to v26 while the repo targets `22.22.2`. `turbo` fails

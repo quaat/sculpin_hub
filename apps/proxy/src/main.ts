@@ -1,8 +1,9 @@
-import { parseProxyConfig } from "@sculpin/config";
-import { createProductionProxyServer } from "./server.js";
+import { parseDataPlaneConfig, parseProxyConfig } from "@sculpin/config";
+import { createSecureProductionProxyServer } from "./server.js";
 import { createShutdownController } from "./shutdown.js";
 const config = parseProxyConfig(process.env);
-const server = createProductionProxyServer(config);
+const dataPlaneConfig = parseDataPlaneConfig(process.env);
+const server = createSecureProductionProxyServer(config, dataPlaneConfig);
 const shutdown = createShutdownController({
   shutdown: () => server.close(),
   timeoutMs: config.shutdownTimeoutMs,

@@ -25,8 +25,8 @@ their acceptance criteria. Live status is in [`STATUS.md`](STATUS.md).
 | M3  | Sculpin catalogue: admin-published knowledge bases/agents, public model aliases | M0, M2     | ✅ core (review pending)     |
 | M4  | Plans & subscriptions (trial + commercial, NO payments), entitlements           | M2, M3     | ✅ core (review pending)     |
 | M5  | Personal Access Tokens lifecycle (+ dedicated security review)                  | M2, M4     | ✅ core (review pending)     |
-| M6  | OpenAI-compatible proxy / broker (fail-closed registry, streaming)              | M0, M5     | pending                     |
-| M7  | Usage metering, quota reservation, analytics/audit                              | M4, M6     | pending                     |
+| M6  | OpenAI-compatible proxy / broker (fail-closed registry, streaming)              | M0, M5     | ✅ core (review PASS)        |
+| M7  | Usage metering, quota reservation, analytics/audit                              | M4, M6     | ⏳ quota done; metering next |
 | M8  | Azure deployment (Key Vault, managed identity, IaC)                             | M6         | pending                     |
 | M9  | Complete verification (security, E2E, ops readiness)                            | all        | pending                     |
 
