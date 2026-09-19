@@ -92,6 +92,49 @@ window) and a full custom adapter (~200 LOC coupled to internals).
 on `create.before` running in-transaction — pin `better-auth` (1.7.5) and re-verify on upgrade.
 **Date:** 2026-09-17. **By:** user choice. Implemented in M2.
 
+## D-013 — M2 identity hardening: token prune, authz primitives, outbox/migration repairs
+
+**Decision (2026-09-19):** Complete the M2 identity slice with four changes:
+
+1. **OAuth provider tokens are pruned, not retained → see [ADR 006](adr/006-oauth-token-non-retention.md).**
+   The `20260919120000` migration had (per an earlier product decision) ADDED
+   `access_token`/`refresh_token`/`id_token`/`*_expires_at`/`scope`/`password` to
+   `external_identities`, contradicting the code comments and CLAUDE.md rule 5. Since the Hub only
+   authenticates a person (it never calls a provider API on their behalf), migration
+   `20260919140000_prune_oauth_tokens` DROPS those columns. Defense-in-depth: the columns are
+   absent (schema authority), `account.create.before` strips the fields to `undefined`, and
+   `account.updateAccountOnSignIn = false` disables the refresh-on-sign-in write. Cost:
+   `advanced.database.validateSchema = false` (Better Auth's adapter schema check requires a
+   column for every writable field); drift is instead caught by Prisma Migrate + integration
+   tests. A DB leak now yields no usable provider credentials.
+
+2. **Server-side authz primitives (`requireUser` / `requireAdmin` / `requireOrganization`)** in
+   `apps/web/app/lib/session.ts`. A valid Better Auth session is treated as an untrusted hint;
+   each primitive re-derives authorization from the CANONICAL DB row on every call (fail closed):
+   `users.status = active`; `users.role = admin` for admin (the session role claim is never
+   trusted); an ACTIVE membership in an ACTIVE organization for org scope. This defends against a
+   stale cookie outliving deactivation, demotion, membership revocation, or org suspension.
+   Unit-tested with injected doubles in `session.test.ts` (no live DB).
+
+3. **Outbox trigger hardening (`20260919150000_harden_outbox_payload_check`).** The
+   personal-organization outbox trigger classified a degenerate `{}` payload as "owner missing"
+   because `array_agg(key) <> ARRAY[...]` is NULL for an empty object (so the payload-invalid
+   branch was skipped). Coalescing the key array + explicit `userId` guard now correctly rejects
+   it as "payload invalid". Security outcome unchanged (still rejected); classification fixed.
+
+4. **Migration tooling repairs.** Added the missing `migration_lock.toml` (Prisma could not
+   determine the connector for `migrate diff`), and declared `onUpdate: NoAction` on every
+   relation in `schema.prisma` to match the deployed SQL (inline `REFERENCES` default to
+   `NO ACTION`, while Prisma's datamodel implicitly assumes `onUpdate: Cascade`). This removed a
+   whole-schema false "drift" so `db:migration:test` (`migrate diff --exit-code`) is now clean.
+   No behavioural DDL change — it reconciles the declared model with the already-deployed database.
+
+**Verification:** all-package typecheck, lint, unit tests (web 51), DB integration (19 incl. the
+new identity suite), `prisma validate`, and the full `run-db-migration-test.mjs` (idempotent
+deploy, status, validate, generate, drift-free diff, SQL invariants) pass. An independent
+security review of this slice is required before sign-off (implementer never self-approves).
+**By:** M2 completion pass.
+
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 
 **Decision:** Set `account.accountLinking.enabled = false` in `apps/web/app/lib/auth.ts`. An
@@ -105,14 +148,18 @@ gets a **separate, isolated account** (never a silent link/takeover). A delibera
 session-authenticated linking flow can be added later. **Date:** 2026-09-17. **By:** security
 review finding (HIGH), auto-applied. Unit-tested in `auth.test.ts`.
 
-**Also from that review (open follow-ups, tracked for M2 completion):**
-- **H-1 (deferred to live-DB step):** `external_identities.provider_email` / `email_verified`
-  are not mapped, so the admin-bootstrap allowlist decision rides only on the in-memory ALS
-  profile captured in `user.create.before`. Map those columns and back the admin decision with
-  the persisted row (auditability + defense-in-depth). Deferred because it needs a schema/mapping
-  change verifiable only against a live DB (none running yet).
-- **M-1 (deferred to live-DB step):** add a real provider-double OAuth integration test proving
-  the atomic invariant, plus a CI invariant query asserting no `users` row lacks a personal org.
+**Also from that review (follow-ups):**
+- **H-1 (RESOLVED 2026-09-19):** `provider_email` / `email_verified` are now mapped via Better
+  Auth `account.additionalFields` and populated in `account.create.before` from the verified ALS
+  profile, so the admin-bootstrap decision is backed by the persisted `external_identities` row
+  (auditability + defense-in-depth). Unit-tested in `auth.test.ts`; the columns are asserted
+  present by `identity.integration.test.ts`.
+- **M-1 (RESOLVED 2026-09-19):** `identity.integration.test.ts` runs against an ephemeral
+  Postgres (real migrations) and asserts (a) the pruned OAuth token columns are absent, (b) the
+  Hub-owned identity/audit columns remain, and (c) the no-orphan-user invariant — after atomic
+  provisioning no `users` row lacks a personal org, and a planted orphan IS detected (proving the
+  invariant query works). The deterministic hook behaviour is covered by provider-double unit
+  tests in `auth.test.ts`. A full HTTP-level provider-double sign-up E2E is deferred to Stage F.
 - **H-2 / L-3 (applied):** org insert is now `ON CONFLICT (personal_owner_user_id) DO NOTHING`
   with a race re-read (no self-inflicted abort on concurrent sign-up); `admin-bootstrap.ts`
   docstring corrected to state it MUST run inside the sign-up transaction.

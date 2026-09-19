@@ -34,9 +34,12 @@ suite("outbox concurrency", () => {
 
   async function insertEvent(overrides: Record<string, unknown> = {}) {
     const id = uuid();
+    // occurred_at defaults to available_at (or now) so the schema invariant
+    // `available_at >= occurred_at` holds even when a fixture back-dates
+    // available_at to model an already-expired lease.
     await pool.query(
       `INSERT INTO outbox_events (id, organization_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, available_at, max_attempts, attempt_count, claimed_until, claim_owner, processed_at, terminal_error_code)
-       VALUES ($1,$2,'organization',$2,'personal_organization.created',1,$3,now(),COALESCE($4, now()),COALESCE($5, 10),COALESCE($6, 0),$7,$8,$9,$10)`,
+       VALUES ($1,$2,'organization',$2,'personal_organization.created',1,$3,COALESCE($11, $4, now()),COALESCE($4, now()),COALESCE($5, 10),COALESCE($6, 0),$7,$8,$9,$10)`,
       [
         id,
         orgId,
@@ -48,6 +51,7 @@ suite("outbox concurrency", () => {
         overrides.claimOwner ?? null,
         overrides.processedAt ?? null,
         overrides.terminalErrorCode ?? null,
+        overrides.occurredAt ?? null,
       ],
     );
     return id;
@@ -115,6 +119,11 @@ suite("outbox concurrency", () => {
     );
 
     const expired = await insertEvent({
+      // A valid expired lease: the row became available in the past and its
+      // lease (claimed_until) ended after that but before now, so a new worker
+      // may reclaim it. available_at < claimed_until < now respects both
+      // `available_at >= occurred_at` and `claimed_until > available_at`.
+      availableAt: new Date(Date.now() - 120_000),
       claimedUntil: new Date(Date.now() - 60_000),
       claimOwner: "old-owner",
     });

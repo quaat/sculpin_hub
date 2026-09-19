@@ -177,14 +177,47 @@ export function buildAuthOptions({
       },
     },
     // Map Better Auth's `account` onto `external_identities`:
-    // providerId -> provider, accountId -> providerSubject. Provider access/
-    // refresh/id tokens are NOT persisted (minimal token retention).
+    // providerId -> provider, accountId -> providerSubject.
+    //
+    // OAuth token retention (ADR 006): the Hub authenticates with Google/GitHub
+    // but never calls a provider API for the user, so it does NOT persist
+    // provider access/refresh/id tokens. Better Auth would otherwise write them
+    // to the account row, so we prune on two axes: `updateAccountOnSignIn:false`
+    // stops the returning-sign-in token refresh, and `account.create.before`
+    // (below) strips the token/credential fields before the insert. The columns
+    // themselves are dropped (migration 20260919140000); see `validateSchema`.
+    //
+    // H-1: `providerEmail` / `emailVerified` are declared as additional account
+    // fields and populated from the verified provider profile in
+    // `account.create.before`, so the admin-bootstrap allowlist decision is
+    // backed by the persisted row (auditability + defense-in-depth), not only
+    // the in-memory ALS profile.
     account: {
       modelName: "externalIdentity",
       fields: {
         providerId: "provider",
         accountId: "providerSubject",
       },
+      // INVARIANT (do not break): these persisted columns are AUDIT-ONLY. On the
+      // OAuth sign-up path they are always overwritten in `account.create.before`
+      // from the in-transaction VERIFIED provider profile, and the admin-bootstrap
+      // decision reads that transient verified profile (`ctx.profile`), NEVER the
+      // stored column. `input:true` is therefore acceptable today (a client cannot
+      // reach an authz decision through them). If a future change ever keys an
+      // authz decision off the stored `provider_email`/`email_verified` column,
+      // flip these to `input:false` first — otherwise the value becomes
+      // client-influenceable. (Security review 2026-09-19, LOW-1.)
+      additionalFields: {
+        providerEmail: { type: "string", required: false, input: true },
+        emailVerified: {
+          type: "boolean",
+          required: false,
+          input: true,
+          defaultValue: false,
+        },
+      },
+      // Do not refresh/store provider tokens on returning sign-in (see above).
+      updateAccountOnSignIn: false,
       // CLAUDE.md rule 7 / GHSA-x445-f3h2-j279: NO automatic cross-provider
       // account linking. Better Auth 1.7.5 defaults `accountLinking.enabled` to
       // TRUE with implicit on-sign-in linking, so we must disable it EXPLICITLY
@@ -250,8 +283,25 @@ export function buildAuthOptions({
               allowlist: config.bootstrapAdminEmails,
               requestId,
             });
-            // Return the account unchanged; the adapter proceeds to insert it.
-            return { data: account };
+            // Strip provider tokens before the insert (ADR 006): setting them to
+            // `undefined` makes the adapter's transformInput skip the fields, so
+            // no token value is ever written (the columns are dropped anyway).
+            // Persist the verified provider email + flag (H-1) so the admin
+            // decision above is backed by the durable row.
+            return {
+              data: {
+                ...(account as Record<string, unknown>),
+                accessToken: undefined,
+                refreshToken: undefined,
+                idToken: undefined,
+                accessTokenExpiresAt: undefined,
+                refreshTokenExpiresAt: undefined,
+                scope: undefined,
+                password: undefined,
+                providerEmail: ctx.profile?.email ?? undefined,
+                emailVerified: ctx.profile?.emailVerified ?? false,
+              },
+            };
           },
         },
       },
@@ -261,7 +311,18 @@ export function buildAuthOptions({
       // non-UUID base64-ish strings (e.g. starting with `T`), which Postgres
       // rejects (P2023). Emit real UUIDs so inserts into every Better Auth table
       // (user/account/session/verification) match the column type.
-      database: { generateId: () => globalThis.crypto.randomUUID() },
+      //
+      // validateSchema:false — Better Auth's adapter schema check (v1.7.5)
+      // requires a column for EVERY field it *could* write, including the OAuth
+      // token columns we deliberately dropped (ADR 006). Since we strip those
+      // fields before write, keeping the check on would fail closed on our own
+      // pruning. Our Prisma migrations are the single schema authority and the
+      // identity integration tests exercise real sign-in against a real DB, so
+      // schema drift is caught there rather than by this check.
+      database: {
+        generateId: () => globalThis.crypto.randomUUID(),
+        validateSchema: false,
+      },
       // Force Secure cookies in production; host-scoped via cookiePrefix so the
       // library emits `__Secure-`/`__Host-`-style names behind the HTTPS edge.
       useSecureCookies: isProduction,

@@ -35,23 +35,46 @@ _Last updated: 2026-09-19_
   - **Security review done** (opus sub-agent, read-only): 0 critical. Applied fixes — account
     linking now disabled EXPLICITLY (library default is ON — see D-012), org insert is
     concurrency-safe (`ON CONFLICT DO NOTHING` + race re-read), admin-bootstrap docstring
-    corrected. Deferred to the live-DB step: persist `provider_email`/`email_verified` and back
-    the admin decision with the DB row (H-1); provider-double integration test + a
-    no-orphan-user CI invariant (M-1).
-  - Deterministic tests: 38/38 web tests pass (auth 13, admin-bootstrap 7, provisioning 8,
-    app 5, health 3, next.config 2); web tsc + eslint clean.
+    corrected.
+  - **H-1 RESOLVED (2026-09-19):** `provider_email`/`email_verified` are mapped via Better Auth
+    `account.additionalFields` and persisted from the verified profile in `account.create.before`,
+    so the admin-bootstrap decision is backed by the durable `external_identities` row (D-013).
+  - **M-1 RESOLVED (2026-09-19):** `packages/db/src/identity.integration.test.ts` (ephemeral
+    Postgres, real migrations) asserts the pruned token columns are absent, the Hub-owned columns
+    remain, and the no-orphan-user invariant holds (and detects a planted orphan). A full
+    HTTP-level provider-double sign-up E2E is deferred to Stage F.
+  - **Server-side authz primitives (2026-09-19):** `apps/web/app/lib/session.ts` adds
+    `requireUser` / `requireAdmin` / `requireOrganization`, which re-derive authorization from the
+    canonical DB row every call (User active; platform role from `users.role`, not the session;
+    active membership in an active org) — a valid session alone is insufficient (D-013).
+  - Deterministic tests: 51/51 web tests pass (auth 13, session/authz 13, admin-bootstrap 7,
+    provisioning 8, app 5, health 3, next.config 2); web tsc + eslint clean.
   - **✅ Live-DB verified (2026-09-19):** Postgres/Redis up via Compose; migrations deployed;
     web/proxy/worker running (web :3002, proxy :3001). Real Google OAuth sign-in works
     end-to-end — `POST /api/auth/sign-in/social` returns a Google redirect with PKCE (S256) +
     state; the atomic personal-tenant provisioning path is exercised on first sign-in.
     Fixes made during bring-up: async `getAuth()` awaiting `database.ready()`; singular Prisma
     delegate model names; `advanced.database.generateId` emits UUIDs to match `@db.Uuid` id
-    columns. Still open follow-ups: H-1 (persist `provider_email`/`email_verified`) and M-1
-    (provider-double integration test + no-orphan-user CI invariant).
-  - **⚠️ Schema tradeoff (CLAUDE.md rule 5):** per an explicit product decision, the Full Better
-    Auth schema migration (`20260919120000_better_auth_full_schema`) added provider
-    `access_token`/`refresh_token`/`id_token`/expiries/`scope`/`password` columns to
-    `external_identities`, relaxing minimal-token-retention. Revisit: encrypt-at-rest or prune.
+    columns.
+  - **✅ OAuth token retention RESOLVED → PRUNE (ADR 006 / D-013, 2026-09-19):** the token
+    columns that `20260919120000` had added are DROPPED by
+    `20260919140000_prune_oauth_tokens`. The Hub only authenticates a person (never calls a
+    provider API for them), so it keeps only `provider`/`provider_subject`/`provider_email`/
+    `email_verified`/`safe_metadata`. Defense-in-depth: columns absent + `create.before` strips
+    the fields + `updateAccountOnSignIn:false`; cost is `validateSchema:false` (drift caught by
+    Prisma Migrate + integration tests). A DB leak yields no usable provider credentials.
+  - **Independent security review of the hardening slice (2026-09-19):** read-only opus
+    reviewer, verdict **PASS** — 0 blocking, 2 LOW. LOW-1 (stored `provider_email`/`email_verified`
+    are `input:true`) is not exploitable today (admin bootstrap reads the in-transaction verified
+    profile, never the column) and is now pinned by an invariant comment in `auth.ts`. LOW-2
+    (`validateSchema:false`) is a bounded, documented trade-off (ADR 006). Confirmed: token
+    non-retention (columns dropped + `create.before` strips all 7 fields + no logging), authz
+    primitives re-derive from canonical rows (role from `users.role`, malformed uuids rejected
+    pre-store, parameterized SQL), `accountLinking:false`, and the outbox trigger only strengthens.
+  - **Foundation repairs (2026-09-19):** hardened the personal-org outbox trigger to classify a
+    degenerate `{}` payload as "payload invalid" (`20260919150000`); added the missing
+    `migration_lock.toml`; declared `onUpdate: NoAction` on all relations to match deployed SQL —
+    `db:migration:test` (`migrate diff --exit-code`) is now drift-free. See D-013.
 
 ## Foundation already in place (from prior branches)
 
@@ -71,15 +94,11 @@ Subscriptions/entitlements, PATs, usage accounting, production proxy routes (fai
 registry still empty), Redis enforcement, Azure infra. (Authentication, OAuth callbacks,
 sessions, and admin bootstrap are now live per M2.)
 
-**⚠️ Dev-only blind forwarder present:** `apps/proxy/src/forward.ts` + `server.ts` route
-`/v1/*` straight to `SCULPIN_UPSTREAM_URL`, forwarding the caller's headers verbatim and NOT
-injecting the upstream credential. It is **gated to `NODE_ENV=development`** in
-`parseProxyConfig` (undefined upstream ⇒ `/v1/*` stays fail-closed 404), so it cannot activate
-in production. It is a temporary bring-up hack for local Sculpin smoke-testing and **still
-violates CLAUDE.md rules 1/3/4 in dev** (forwards caller PAT/cookies; no credential injection;
-blind route pass-through). It MUST be replaced by the fail-closed registry + centralized
-credential injection (Phase A of [`NEXT_PHASE_PLAN.md`](NEXT_PHASE_PLAN.md)) before any real
-test-case use.
+**✅ Dev-only blind forwarder DELETED (Stage A):** the temporary `apps/proxy/src/forward.ts`
+bring-up hack (which forwarded caller headers verbatim to `SCULPIN_UPSTREAM_URL` without
+credential injection) has been removed; `/v1/*` is once again fully fail-closed via the empty
+registry. The production data plane will be built as the reviewed fail-closed registry +
+centralized credential injection in M6/M7 — NOT as an unauthenticated intermediate proxy.
 
 ## Working-tree state
 
@@ -92,8 +111,10 @@ test-case use.
 ## Baseline verification (2026-09-19)
 
 - `pnpm install --frozen-lockfile` and `prisma:generate`: OK. `tsc --noEmit` clean for web +
-  proxy. Unit tests: **111 passed / 15 skipped**; web package **38/38** under its own config.
-  Integration tests require Compose Postgres (skipped in the deterministic run).
+  proxy. Unit tests green across packages; web package **51/51** under its own config (auth 13,
+  session/authz 13, admin-bootstrap 7, provisioning 8, app 5, health 3, next.config 2).
+  Integration tests require Compose Postgres (run via `run-db-integration.mjs` with an ephemeral
+  DB; **19/19** including the new `identity.integration.test.ts`).
 - **Env caveat:** the sandbox pins Node to v26 while the repo targets `22.22.2`. `turbo` fails
   with "cannot find package manager binary" until the nvm `v22.22.2/bin` dir is on `PATH`
   (which supplies a real `pnpm` shim); with that prefix the standard `pnpm lint|typecheck|test`

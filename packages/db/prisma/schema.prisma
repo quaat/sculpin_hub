@@ -74,24 +74,24 @@ model User {
   @@map("users")
 }
 
+// The Hub uses Google/GitHub ONLY to authenticate a person, never to call a
+// provider API on the user's behalf. OAuth access/refresh/id tokens are
+// therefore NEVER persisted (CLAUDE.md rule 5 / ADR 006). The columns that
+// Better Auth's account adapter would otherwise fill (access_token,
+// refresh_token, id_token, *_expires_at, scope, password) are DROPPED; the auth
+// layer additionally strips those fields before write and disables
+// update-on-sign-in so a DB leak yields no usable provider credentials.
 model ExternalIdentity {
-  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId                String    @map("user_id") @db.Uuid
-  provider              String    @db.VarChar(32)
-  providerSubject       String    @map("provider_subject") @db.VarChar(255)
-  providerEmail         String?   @map("provider_email") @db.VarChar(254)
-  emailVerified         Boolean   @default(false) @map("email_verified")
-  metadata              Json?     @map("safe_metadata")
-  accessToken           String?   @map("access_token")
-  refreshToken          String?   @map("refresh_token")
-  idToken               String?   @map("id_token")
-  accessTokenExpiresAt  DateTime? @map("access_token_expires_at") @db.Timestamptz(6)
-  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at") @db.Timestamptz(6)
-  scope                 String?   @db.VarChar(512)
-  password              String?   @db.VarChar(255)
-  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt             DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
-  user                  User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  provider        String   @db.VarChar(32)
+  providerSubject String   @map("provider_subject") @db.VarChar(255)
+  providerEmail   String?  @map("provider_email") @db.VarChar(254)
+  emailVerified   Boolean  @default(false) @map("email_verified")
+  metadata        Json?    @map("safe_metadata")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([provider, providerSubject], map: "external_identities_provider_provider_subject_key")
   @@index([userId], map: "idx_external_identities_user_id")
@@ -103,7 +103,7 @@ model Organization {
   slug                String                   @unique @db.VarChar(63)
   type                OrganizationType
   personalOwnerUserId String?                  @map("personal_owner_user_id") @db.Uuid
-  personalOwner       User?                    @relation("PersonalOrganizationOwner", fields: [personalOwnerUserId], references: [id], onDelete: Restrict)
+  personalOwner       User?                    @relation("PersonalOrganizationOwner", fields: [personalOwnerUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   status              OrganizationStatus       @default(active)
   createdAt           DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt           DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -125,8 +125,8 @@ model OrganizationMembership {
   status         MembershipStatus @default(active)
   createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  user           User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   auditEvents    AuditEvent[]
 
   @@unique([organizationId, userId], map: "organization_memberships_organization_id_user_id_key")
@@ -147,9 +147,9 @@ model AuditEvent {
   afterSummary    Json?                   @map("after_summary")
   requestId       String                  @map("request_id") @db.VarChar(128)
   occurredAt      DateTime                @map("occurred_at") @db.Timestamptz(6)
-  organization    Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  actorUser       User?                   @relation(fields: [actorUserId], references: [id], onDelete: Restrict)
-  actorMembership OrganizationMembership? @relation(fields: [organizationId, actorUserId], references: [organizationId, userId], onDelete: Restrict)
+  organization    Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actorUser       User?                   @relation(fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actorMembership OrganizationMembership? @relation(fields: [organizationId, actorUserId], references: [organizationId, userId], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([organizationId, occurredAt], map: "idx_audit_events_org_occurred")
   @@map("audit_events")
@@ -172,7 +172,7 @@ model OutboxEvent {
   processedAt       DateTime?     @map("processed_at") @db.Timestamptz(6)
   terminalErrorCode String?       @map("terminal_error_code") @db.VarChar(80)
   version           Int           @default(1)
-  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([organizationId, aggregateType, aggregateId], map: "idx_outbox_events_org_aggregate")
   @@map("outbox_events")
@@ -189,7 +189,7 @@ model Session {
   userAgent String?  @map("user_agent") @db.VarChar(512)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([userId], map: "idx_sessions_user_id")
   @@index([expiresAt], map: "idx_sessions_expires_at")

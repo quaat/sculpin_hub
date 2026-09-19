@@ -173,8 +173,25 @@ describe("atomic provisioning hook (account.create.before)", () => {
     const account = { userId, providerId: "google", accountId: "sub-1" };
     const result = await proxied.$transaction(() => before(account));
 
-    // Hook returns the account unchanged so the adapter proceeds to insert it.
-    expect(result).toEqual({ data: account });
+    // Hook returns the account with the identity fields preserved so the
+    // adapter proceeds to insert it...
+    const data = (result as { data: Record<string, unknown> }).data;
+    expect(data.userId).toBe(userId);
+    expect(data.providerId).toBe("google");
+    expect(data.accountId).toBe("sub-1");
+    // ...but every OAuth token/credential field is stripped to `undefined`
+    // (ADR 006) so transformInput skips it and no token value is ever written.
+    expect(data.accessToken).toBeUndefined();
+    expect(data.refreshToken).toBeUndefined();
+    expect(data.idToken).toBeUndefined();
+    expect(data.accessTokenExpiresAt).toBeUndefined();
+    expect(data.refreshTokenExpiresAt).toBeUndefined();
+    expect(data.scope).toBeUndefined();
+    expect(data.password).toBeUndefined();
+    // Provider email is absent in this path (no profile captured); the verified
+    // flag defaults to false (H-1 durable row backs the admin decision).
+    expect(data.providerEmail).toBeUndefined();
+    expect(data.emailVerified).toBe(false);
     // org INSERT + membership + audit + outbox all ran against the tx client.
     expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
     expect(tx.$executeRaw).toHaveBeenCalledTimes(3);
