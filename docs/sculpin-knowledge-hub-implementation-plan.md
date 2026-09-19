@@ -1,6 +1,16 @@
 # Sculpin Knowledge Hub: production MVP implementation plan
 
-**Status:** proposed | **Date:** 2026-08-03 | **Audience:** product, security, engineering, operations
+> **⚠️ HISTORICAL / SUPERSEDED — not authoritative.** This long-form document is
+> retained as background design rationale only. It predates the current mission and
+> describes decisions that have since been reversed: it references **LinkedIn** login
+> and **Stripe**/paid-provider billing, neither of which exist in v1 (identity is
+> **Google/GitHub**; there are **no payments** — see [`DECISIONS.md`](DECISIONS.md#d-004)).
+> Where this file conflicts with the sources below, the sources win. The authoritative
+> spec is: the milestone tracker [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md),
+> the decision log [`DECISIONS.md`](DECISIONS.md) + ADRs in [`adr/`](adr/), the current
+> state [`STATUS.md`](STATUS.md), and the security rules in [`../CLAUDE.md`](../CLAUDE.md).
+
+**Status:** superseded (historical) | **Date:** 2026-08-03 | **Audience:** product, security, engineering, operations
 
 ## 1. Executive summary
 

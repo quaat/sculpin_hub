@@ -1,10 +1,14 @@
 # Sculpin Hub — Milestone Tracker
 
-This is the **milestone-level execution tracker**. The authoritative long-form design lives in
+This is the **authoritative milestone-level execution tracker**. Together with
+[`DECISIONS.md`](DECISIONS.md), the ADRs in [`adr/`](adr/), [`STATUS.md`](STATUS.md), and the
+security rules in [`../CLAUDE.md`](../CLAUDE.md), it is the source of truth for what the Hub
+builds. The long-form
 [`sculpin-knowledge-hub-implementation-plan.md`](sculpin-knowledge-hub-implementation-plan.md)
-(generated from [`../plan.md`](../plan.md)) and the ADRs in [`adr/`](adr/). This file records
-the orchestration milestones the lead agent executes and their acceptance criteria. Live
-status is in [`STATUS.md`](STATUS.md).
+(generated from [`../plan.md`](../plan.md)) is **historical/superseded** background — it
+references LinkedIn/Stripe, which v1 does not use; where it conflicts, this tracker and the
+decision log win. This file records the orchestration milestones the lead agent executes and
+their acceptance criteria. Live status is in [`STATUS.md`](STATUS.md).
 
 > **Scope note / divergence:** the long-form plan predates the current mission and references
 > Google/**LinkedIn** login and **Stripe** billing. The current mission supersedes those:

@@ -75,10 +75,14 @@ These come from the mission and MUST hold in every change:
 
 ## Where to look
 
-- Detailed design: `docs/sculpin-knowledge-hub-implementation-plan.md` (authoritative long form).
-- Milestone tracker: `docs/IMPLEMENTATION_PLAN.md`. Current state: `docs/STATUS.md`.
+The **authoritative** spec is the milestone tracker + decisions + ADRs + current status
+(below). The long-form plan is **historical/superseded** background only — it references
+LinkedIn/Stripe, which v1 does not use; where it conflicts, the sources below win.
+
+- Authoritative milestones: `docs/IMPLEMENTATION_PLAN.md`. Current state: `docs/STATUS.md`.
 - Decisions: `docs/DECISIONS.md` + `docs/adr/`. Threats: `docs/THREAT_MODEL.md`.
 - Upstream contract: `docs/SCULPIN_INTEGRATION.md`. Orchestration: `AGENT.md`.
+- Historical design (superseded): `docs/sculpin-knowledge-hub-implementation-plan.md`.
 
 ## Working style in this repo
 
