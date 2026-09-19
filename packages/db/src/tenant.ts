@@ -1,5 +1,6 @@
 import {
   DomainConflictError,
+  TRIAL_REQUEST_QUOTA,
   validateCreatePersonalTenantCommand,
   type CreatePersonalTenantCommand,
   type IdentityRepository,
@@ -73,6 +74,13 @@ export class PostgresPersonalTenantTransaction
       await client.query(
         "INSERT INTO outbox_events (organization_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, available_at) VALUES ($1,'organization',$1,'personal_organization.created',1,$2,now(),now())",
         [organizationId, payload],
+      );
+      // Grant the tenant a trial subscription so a valid credential alone does
+      // not entitle `/v1/*` access (D-015). Same transaction → no window where a
+      // provisioned tenant lacks its trial.
+      await client.query(
+        "INSERT INTO subscriptions (organization_id, plan, status, quota_limit) VALUES ($1,'trial','active',$2)",
+        [organizationId, TRIAL_REQUEST_QUOTA],
       );
       await client.query("COMMIT");
       return { userId, organizationId };

@@ -11,6 +11,7 @@ const expectedSuites = new Set([
   "outbox.integration.test.ts",
   "identity.integration.test.ts",
   "catalogue.integration.test.ts",
+  "subscription.integration.test.ts",
 ]);
 
 function quoteIdentifier(value) {

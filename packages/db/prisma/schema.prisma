@@ -58,6 +58,21 @@ enum CatalogueEntryStatus {
   @@map("catalogue_entry_status")
 }
 
+enum SubscriptionPlan {
+  trial
+  commercial
+
+  @@map("subscription_plan")
+}
+
+enum SubscriptionStatus {
+  active
+  canceled
+  expired
+
+  @@map("subscription_status")
+}
+
 model User {
   id                   String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   normalizedEmail      String                   @map("normalized_email") @db.VarChar(254)
@@ -121,6 +136,7 @@ model Organization {
   memberships         OrganizationMembership[]
   auditEvents         AuditEvent[]
   outboxEvents        OutboxEvent[]
+  subscriptions       Subscription[]
 
   @@unique([personalOwnerUserId], map: "organizations_personal_owner_user_id_key")
   @@index([status], map: "idx_organizations_status")
@@ -209,6 +225,30 @@ model CatalogueEntry {
 
   @@index([status], map: "idx_catalogue_entries_status")
   @@map("catalogue_entries")
+}
+
+// M4 subscription (NO payment provider; D-004/D-015). Every tenant gets a
+// `trial` at provisioning so a valid credential alone is insufficient to call
+// `/v1/*` — access requires an ACTIVE, in-quota entitlement (the union of a
+// tenant's active subscriptions). Quota reservation is a single conditional
+// UPDATE (never read-compare-write); `quota_used <= quota_limit` is enforced by
+// a DB CHECK as defense in depth (CLAUDE.md rule 6).
+model Subscription {
+  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String             @map("organization_id") @db.Uuid
+  plan           SubscriptionPlan
+  status         SubscriptionStatus @default(active)
+  quotaLimit     Int                @map("quota_limit")
+  quotaUsed      Int                @default(0) @map("quota_used")
+  startsAt       DateTime           @default(now()) @map("starts_at") @db.Timestamptz(6)
+  endsAt         DateTime?          @map("ends_at") @db.Timestamptz(6)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version        Int                @default(1)
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([organizationId, status], map: "idx_subscriptions_org_status")
+  @@map("subscriptions")
 }
 
 // Better Auth server-side (database) session. The cookie carries only the

@@ -192,9 +192,10 @@ describe("atomic provisioning hook (account.create.before)", () => {
     // flag defaults to false (H-1 durable row backs the admin decision).
     expect(data.providerEmail).toBeUndefined();
     expect(data.emailVerified).toBe(false);
-    // org INSERT + membership + audit + outbox all ran against the tx client.
+    // org INSERT + membership + audit + outbox + trial subscription all ran
+    // against the tx client.
     expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
-    expect(tx.$executeRaw).toHaveBeenCalledTimes(3);
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(4);
   });
 
   it("rejects an account create without a user id", async () => {
@@ -240,8 +241,9 @@ describe("atomic provisioning hook (account.create.before)", () => {
 
     // Provisioning (2 queries) + admin bootstrap (UPDATE + org SELECT = 2).
     expect(tx.$queryRaw).toHaveBeenCalledTimes(4);
-    // Provisioning writes 3 rows + admin bootstrap audit = 4.
-    expect(tx.$executeRaw).toHaveBeenCalledTimes(4);
+    // Provisioning writes 4 rows (membership/audit/outbox/trial) + admin
+    // bootstrap audit = 5.
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(5);
   });
 
   it("does not elevate an unverified allowlisted email", async () => {
@@ -265,6 +267,6 @@ describe("atomic provisioning hook (account.create.before)", () => {
 
     // Only provisioning ran; no admin-bootstrap UPDATE/SELECT/audit.
     expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
-    expect(tx.$executeRaw).toHaveBeenCalledTimes(3);
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(4);
   });
 });

@@ -172,6 +172,50 @@ Stage E (M6). Admin UI is Stage G.
 drift-free. An independent security review of this slice is required before sign-off.
 **By:** M3 implementation pass.
 
+## D-015 — M4 subscriptions & entitlements: trial-on-provisioning, union entitlement, atomic quota
+
+**Decision (2026-09-19):** Implement M4 as a subscription state machine + entitlement resolution
+with NO payment provider ([[D-004]]).
+
+1. **Data model** (`subscriptions`, migration `20260919170000_subscriptions`): `organization_id`
+   (FK `ON DELETE RESTRICT`), `plan` (`trial`/`commercial`), `status` (`active`/`canceled`/
+   `expired`), `quota_limit`, `quota_used`, `starts_at`, `ends_at?`, `version`. A DB CHECK
+   `quota_used <= quota_limit` is defense-in-depth against over-draw (CLAUDE.md rule 6).
+
+2. **State machine.** `active` is the only non-terminal state; `active → canceled` and
+   `active → expired` are the sole transitions (terminal states are dead — reactivation mints a new
+   subscription). Enforced in the domain (`assertSubscriptionTransition`) AND in SQL
+   (`setStatus` updates only `WHERE status = 'active'`, atomically stamping `ends_at`).
+
+3. **Entitlement = union of active subscriptions.** `resolveEntitlement` (pure, unit-tested)
+   treats a subscription as active when `status = 'active'` AND in its validity window
+   (`ends_at` future or NULL); `remainingQuota` is the pooled unused budget across those.
+
+4. **Trial on provisioning (fail-closed authz).** Every personal tenant is granted an `active`
+   `trial` (`TRIAL_REQUEST_QUOTA = 200`) inside the SAME provisioning transaction (both the web
+   Prisma path `provisionPersonalTenant` and the pg `PostgresPersonalTenantTransaction`), so a
+   valid session/PAT alone does NOT entitle `/v1/*` — `requireEntitledOrganization`
+   (`apps/web/app/lib/entitlement.ts`) additionally requires an active, in-quota entitlement,
+   throwing stable `AuthzError` reasons (`no_active_subscription`/`quota_exhausted`).
+
+5. **Atomic quota reservation (CLAUDE.md rule 6).** `reserveQuota` is a single conditional UPDATE
+   whose target row is selected + row-locked (`FOR UPDATE`, no `SKIP LOCKED`) by a subquery
+   matching an active, in-window subscription with `quota_used + amount <= quota_limit`. No
+   read-compare-write anywhere. An integration test fires 25 concurrent last-quota reservations
+   against a budget of 5 and asserts exactly 5 succeed and `quota_used` never exceeds
+   `quota_limit`.
+
+**Scope (deferred, not in M4):** no usage/metering events, analytics, or audit surfaces (M7); no
+subscription outbox events; `commercial` subscriptions are provisioned administratively (no
+payment provider, [[D-004]]); admin subscription UI is Stage G. Per-request metering that consumes
+`reserveQuota` lands with the proxy data plane (M6/M7). Do NOT rely on Sculpin's upstream `usage`
+for accounting ([[D-007]]).
+
+**Verification:** all-package typecheck + lint clean; unit (domain 46, web 68 incl. new
+`entitlement.test.ts` 7); DB integration 31 incl. the new `subscription.integration.test.ts` (6);
+`db:migration:test` drift-free. An independent security review of this slice is required before
+sign-off. **By:** M4 implementation pass.
+
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 
 **Decision:** Set `account.accountLinking.enabled = false` in `apps/web/app/lib/auth.ts`. An

@@ -1,4 +1,5 @@
 import { validateOutboxPayload } from "@sculpin/db";
+import { TRIAL_REQUEST_QUOTA } from "@sculpin/domain";
 import type { Prisma } from "../../../../packages/db/generated/prisma/index.js";
 
 /**
@@ -119,6 +120,14 @@ export async function provisionPersonalTenant(
     VALUES
       (${organizationId}::uuid, 'organization', ${organizationId}::uuid, 'personal_organization.created', 1,
        ${JSON.stringify(payload)}::jsonb, now(), now())
+  `;
+
+  // Grant the tenant a trial subscription in the SAME transaction so a valid
+  // credential alone never entitles `/v1/*` access (D-015). Only runs on the
+  // create path, so an idempotent re-provision does not mint a second trial.
+  await tx.$executeRaw`
+    INSERT INTO subscriptions (organization_id, plan, status, quota_limit)
+    VALUES (${organizationId}::uuid, 'trial', 'active', ${TRIAL_REQUEST_QUOTA})
   `;
 
   return { userId, organizationId, created: true };

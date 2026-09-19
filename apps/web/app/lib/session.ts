@@ -55,7 +55,9 @@ export type AuthzReason =
   | "organization_not_found"
   | "organization_inactive"
   | "not_a_member"
-  | "membership_inactive";
+  | "membership_inactive"
+  | "no_active_subscription"
+  | "quota_exhausted";
 
 /**
  * Thrown when authorization fails. Carries a stable machine `reason` (never a

@@ -54,7 +54,7 @@ describe("personalOrganizationSlug", () => {
 });
 
 describe("provisionPersonalTenant", () => {
-  it("inserts org, membership, audit, and outbox for an existing user", async () => {
+  it("inserts org, membership, audit, outbox, and a trial subscription for an existing user", async () => {
     const orgId = "22222222-2222-4222-8222-222222222222";
     const { tx, executes, $queryRaw, $executeRaw } = fakeTx(null, orgId);
 
@@ -63,12 +63,13 @@ describe("provisionPersonalTenant", () => {
     expect(result).toEqual({ userId, organizationId: orgId, created: true });
     // 1 lookup + 1 org INSERT ... RETURNING.
     expect($queryRaw).toHaveBeenCalledTimes(2);
-    // membership, audit, outbox.
-    expect($executeRaw).toHaveBeenCalledTimes(3);
+    // membership, audit, outbox, trial subscription.
+    expect($executeRaw).toHaveBeenCalledTimes(4);
     const flat = executes.join("\n");
     expect(flat).toContain("organization_memberships");
     expect(flat).toContain("audit_events");
     expect(flat).toContain("outbox_events");
+    expect(flat).toContain("subscriptions");
   });
 
   it("tolerates a concurrent race: no INSERT row, re-reads the winner's org", async () => {

@@ -1,12 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  assertSubscriptionTransition,
+  canTransitionSubscription,
   CreatePersonalTenantService,
   DomainValidationError,
+  isSubscriptionActive,
+  resolveEntitlement,
   toPublicModel,
   validateCatalogueEntryInput,
   validateCreatePersonalTenantCommand,
+  validateQuotaAmount,
   type CatalogueEntry,
   type CatalogueEntryInput,
+  type Subscription,
+  type SubscriptionStatus,
 } from "./index.js";
 
 const valid = {
@@ -143,4 +150,114 @@ describe("toPublicModel", () => {
     expect(model).toEqual({ id: "sculpin-fast", displayName: "Sculpin Fast" });
     expect("description" in model).toBe(false);
   });
+});
+
+const ORG = "22222222-2222-4222-8222-222222222222";
+const NOW = new Date("2026-09-19T00:00:00.000Z");
+
+function sub(overrides: Partial<Subscription> = {}): Subscription {
+  return {
+    id: "33333333-3333-4333-8333-333333333333",
+    organizationId: ORG,
+    plan: "trial",
+    status: "active",
+    quotaLimit: 200,
+    quotaUsed: 0,
+    startsAt: new Date("2026-09-01T00:00:00.000Z"),
+    version: 1,
+    ...overrides,
+  };
+}
+
+describe("isSubscriptionActive", () => {
+  it("is active when status active and open-ended", () =>
+    expect(isSubscriptionActive(sub(), NOW)).toBe(true));
+  it("is active when status active and ends in the future", () =>
+    expect(
+      isSubscriptionActive(
+        sub({ endsAt: new Date("2026-09-20T00:00:00.000Z") }),
+        NOW,
+      ),
+    ).toBe(true));
+  it("is inactive when ended in the past", () =>
+    expect(
+      isSubscriptionActive(
+        sub({ endsAt: new Date("2026-09-18T00:00:00.000Z") }),
+        NOW,
+      ),
+    ).toBe(false));
+  it.each<SubscriptionStatus>(["canceled", "expired"])(
+    "is inactive when status is %s",
+    (status) => expect(isSubscriptionActive(sub({ status }), NOW)).toBe(false),
+  );
+});
+
+describe("resolveEntitlement", () => {
+  it("is inactive with no subscriptions", () =>
+    expect(resolveEntitlement(ORG, [], NOW)).toEqual({
+      organizationId: ORG,
+      active: false,
+      plans: [],
+      remainingQuota: 0,
+    }));
+  it("ignores terminal and out-of-window subscriptions", () => {
+    const entitlement = resolveEntitlement(
+      ORG,
+      [
+        sub({ status: "canceled", quotaLimit: 500, quotaUsed: 0 }),
+        sub({ endsAt: new Date("2026-09-01T00:00:00.000Z"), quotaLimit: 500 }),
+      ],
+      NOW,
+    );
+    expect(entitlement.active).toBe(false);
+    expect(entitlement.remainingQuota).toBe(0);
+  });
+  it("pools remaining quota across the union of active subscriptions", () => {
+    const entitlement = resolveEntitlement(
+      ORG,
+      [
+        sub({ plan: "trial", quotaLimit: 200, quotaUsed: 150 }),
+        sub({ plan: "commercial", quotaLimit: 1000, quotaUsed: 100 }),
+      ],
+      NOW,
+    );
+    expect(entitlement.active).toBe(true);
+    expect(entitlement.plans).toEqual(["commercial", "trial"]);
+    expect(entitlement.remainingQuota).toBe(50 + 900);
+  });
+  it("clamps a negative per-subscription remainder to zero", () =>
+    expect(
+      resolveEntitlement(
+        ORG,
+        [sub({ quotaLimit: 200, quotaUsed: 250 })],
+        NOW,
+      ).remainingQuota,
+    ).toBe(0));
+});
+
+describe("subscription state machine", () => {
+  it("allows active → canceled and active → expired", () => {
+    expect(canTransitionSubscription("active", "canceled")).toBe(true);
+    expect(canTransitionSubscription("active", "expired")).toBe(true);
+  });
+  it.each<[SubscriptionStatus, SubscriptionStatus]>([
+    ["active", "active"],
+    ["canceled", "active"],
+    ["expired", "active"],
+    ["canceled", "expired"],
+    ["expired", "canceled"],
+  ])("forbids %s → %s", (from, to) => {
+    expect(canTransitionSubscription(from, to)).toBe(false);
+    expect(() => assertSubscriptionTransition(from, to)).toThrow(
+      DomainValidationError,
+    );
+  });
+});
+
+describe("validateQuotaAmount", () => {
+  it("accepts a positive integer within bounds", () =>
+    expect(() => validateQuotaAmount(1)).not.toThrow());
+  it.each([0, -1, 1.5, 1001, Number.NaN])("rejects %s", (amount) =>
+    expect(() => validateQuotaAmount(amount)).toThrow(DomainValidationError),
+  );
 });

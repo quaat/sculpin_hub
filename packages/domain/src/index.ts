@@ -283,3 +283,150 @@ export interface CatalogueRepository {
   listPublished(): Promise<readonly PublicModel[]>;
   resolvePublishedAlias(alias: string): Promise<{ upstreamAgentId: string } | undefined>;
 }
+
+// ---------------------------------------------------------------------------
+// M4 — Subscriptions & entitlements (NO payment provider; D-004)
+//
+// Every tenant gets a `trial` subscription at provisioning so that having a
+// valid PAT/session is NOT by itself sufficient to call `/v1/*` — access is
+// gated on an ACTIVE, in-quota entitlement (D-015). An entitlement is the UNION
+// of a tenant's active subscriptions: a subscription counts when its status is
+// `active` and it is within its validity window (`endsAt` in the future or
+// open-ended). There is no payment provider in v1; `commercial` subscriptions
+// are provisioned administratively. Quota reservation MUST be atomic (a single
+// conditional UPDATE, never read-compare-write) so concurrent last-quota
+// attempts cannot over-draw (CLAUDE.md rule 6) — the repository owns that SQL;
+// the pure helpers here (`resolveEntitlement`, the state machine) stay
+// deterministic and side-effect free for unit testing.
+// ---------------------------------------------------------------------------
+
+export type SubscriptionPlan = "trial" | "commercial";
+export type SubscriptionStatus = "active" | "canceled" | "expired";
+
+/** Default request budget granted to a new personal tenant's trial. */
+export const TRIAL_REQUEST_QUOTA = 200;
+
+export interface Subscription {
+  readonly id: string;
+  readonly organizationId: OrganizationId;
+  readonly plan: SubscriptionPlan;
+  readonly status: SubscriptionStatus;
+  readonly quotaLimit: number;
+  readonly quotaUsed: number;
+  readonly startsAt: Date;
+  readonly endsAt?: Date;
+  readonly version: number;
+}
+
+// Subscription state machine. `active` is the only non-terminal state; both
+// `canceled` and `expired` are terminal (a new subscription is created rather
+// than reactivating a dead one). Kept as data so the transition set is auditable.
+const subscriptionTransitions: Readonly<
+  Record<SubscriptionStatus, readonly SubscriptionStatus[]>
+> = {
+  active: ["canceled", "expired"],
+  canceled: [],
+  expired: [],
+};
+
+export function canTransitionSubscription(
+  from: SubscriptionStatus,
+  to: SubscriptionStatus,
+): boolean {
+  return subscriptionTransitions[from].includes(to);
+}
+
+export function assertSubscriptionTransition(
+  from: SubscriptionStatus,
+  to: SubscriptionStatus,
+): void {
+  if (!canTransitionSubscription(from, to))
+    throw new DomainValidationError(
+      `Illegal subscription transition ${from} -> ${to}.`,
+    );
+}
+
+export function isSubscriptionActive(
+  subscription: Subscription,
+  now: Date,
+): boolean {
+  return (
+    subscription.status === "active" &&
+    (subscription.endsAt === undefined ||
+      subscription.endsAt.getTime() > now.getTime())
+  );
+}
+
+/**
+ * Resolved access state for a tenant: the union of its active subscriptions.
+ * `active` is true when at least one subscription is active and in-window;
+ * `remainingQuota` is the pooled unused budget across those subscriptions.
+ */
+export interface Entitlement {
+  readonly organizationId: OrganizationId;
+  readonly active: boolean;
+  readonly plans: readonly SubscriptionPlan[];
+  readonly remainingQuota: number;
+}
+
+export function resolveEntitlement(
+  organizationId: OrganizationId,
+  subscriptions: readonly Subscription[],
+  now: Date,
+): Entitlement {
+  const activeSubscriptions = subscriptions.filter((subscription) =>
+    isSubscriptionActive(subscription, now),
+  );
+  const plans = [
+    ...new Set(activeSubscriptions.map((subscription) => subscription.plan)),
+  ].sort();
+  const remainingQuota = activeSubscriptions.reduce(
+    (sum, subscription) =>
+      sum + Math.max(0, subscription.quotaLimit - subscription.quotaUsed),
+    0,
+  );
+  return {
+    organizationId,
+    active: activeSubscriptions.length > 0,
+    plans,
+    remainingQuota,
+  };
+}
+
+export function validateQuotaAmount(amount: number): void {
+  if (!Number.isInteger(amount) || amount < 1 || amount > 1000)
+    throw new DomainValidationError(
+      "Quota reservation amount must be an integer between 1 and 1000.",
+    );
+}
+
+/**
+ * Result of an atomic quota reservation. `granted` is true only when the
+ * repository's conditional UPDATE claimed the amount from an active, in-quota
+ * subscription; `remainingQuota` is the tenant's pooled remaining budget after
+ * the attempt (0 on a denied, exhausted tenant).
+ */
+export interface QuotaReservation {
+  readonly granted: boolean;
+  readonly remainingQuota: number;
+}
+
+export interface SubscriptionRepository {
+  listForOrganization(
+    organizationId: OrganizationId,
+  ): Promise<readonly Subscription[]>;
+  /**
+   * Atomically reserve `amount` of request quota from the tenant's active
+   * subscriptions. MUST be a single conditional UPDATE (no read-compare-write)
+   * so concurrent last-quota attempts cannot over-draw.
+   */
+  reserveQuota(
+    organizationId: OrganizationId,
+    amount: number,
+  ): Promise<QuotaReservation>;
+  /** Terminal transition of an active subscription (state machine enforced). */
+  setStatus(
+    id: string,
+    status: SubscriptionStatus,
+  ): Promise<Subscription | undefined>;
+}

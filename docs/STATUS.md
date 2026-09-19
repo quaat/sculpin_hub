@@ -75,6 +75,15 @@ _Last updated: 2026-09-19_
     degenerate `{}` payload as "payload invalid" (`20260919150000`); added the missing
     `migration_lock.toml`; declared `onUpdate: NoAction` on all relations to match deployed SQL —
     `db:migration:test` (`migrate diff --exit-code`) is now drift-free. See D-013.
+- **M4 (subscriptions/entitlements):** ✅ core implemented (pending independent security review) —
+  D-015. Subscription state machine (`active` → `canceled`/`expired`), entitlement as the UNION of
+  active in-window subscriptions (`resolveEntitlement`), and a `trial` (quota 200) granted in the
+  SAME provisioning transaction so a valid credential alone does NOT entitle `/v1/*` — the
+  `apps/web/app/lib/entitlement.ts` gate additionally requires an active, in-quota entitlement.
+  Quota reservation is a single atomic conditional UPDATE (`reserveQuota`, `FOR UPDATE`, no
+  read-compare-write); an integration test proves no over-draw under a concurrent last-quota
+  stampede. NO payment provider (D-004). Deferred: metering/analytics (M7), subscription outbox,
+  admin subscription UI (Stage G). Migration `20260919170000_subscriptions`.
 - **M3 (catalogue):** ✅ core implemented (pending independent security review) — D-014.
   Admin-published `public_alias → upstream_agent_id` map (`catalogue_entries`, migration
   `20260919160000_catalogue`). Fail-closed resolution: only `published` aliases resolve;
@@ -120,10 +129,11 @@ centralized credential injection in M6/M7 — NOT as an unauthenticated intermed
 ## Baseline verification (2026-09-19)
 
 - `pnpm install --frozen-lockfile` and `prisma:generate`: OK. `tsc --noEmit` clean for web +
-  proxy. Unit tests green across packages; web package **51/51** under its own config (auth 13,
-  session/authz 13, admin-bootstrap 7, provisioning 8, app 5, health 3, next.config 2).
-  Integration tests require Compose Postgres (run via `run-db-integration.mjs` with an ephemeral
-  DB; **19/19** including the new `identity.integration.test.ts`).
+  proxy. Unit tests green across packages; web package **68/68** under its own config (auth 13,
+  session/authz 13, catalogue 10, entitlement 7, admin-bootstrap 7, provisioning 8, app 5,
+  health 3, next.config 2); domain **46/46**. Integration tests require Compose Postgres (run via
+  `run-db-integration.mjs` with an ephemeral DB; **31/31** including `subscription.integration.
+  test.ts` (6) and `catalogue.integration.test.ts` (6)). `db:migration:test` drift-free.
 - **Env caveat:** the sandbox pins Node to v26 while the repo targets `22.22.2`. `turbo` fails
   with "cannot find package manager binary" until the nvm `v22.22.2/bin` dir is on `PATH`
   (which supplies a real `pnpm` shim); with that prefix the standard `pnpm lint|typecheck|test`
