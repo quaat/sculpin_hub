@@ -3,7 +3,7 @@
 Live snapshot of where the project is. Update as milestones progress. Milestone definitions and
 acceptance criteria are in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
 
-_Last updated: 2026-09-17_
+_Last updated: 2026-09-19_
 
 ## Current focus
 
@@ -38,9 +38,18 @@ _Last updated: 2026-09-17_
     no-orphan-user CI invariant (M-1).
   - Deterministic tests: 38/38 web tests pass (auth 13, admin-bootstrap 7, provisioning 8,
     app 5, health 3, next.config 2); web tsc + eslint clean.
-  - **Still pending before M2 can be declared complete:** live-DB verification — migration deploy
-    + real Google/GitHub OAuth sign-up exercising the atomic path and the
-    `emailVerified`-in-`user.create.before` assumption; then H-1 + M-1. No DB is running yet.
+  - **✅ Live-DB verified (2026-09-19):** Postgres/Redis up via Compose; migrations deployed;
+    web/proxy/worker running (web :3002, proxy :3001). Real Google OAuth sign-in works
+    end-to-end — `POST /api/auth/sign-in/social` returns a Google redirect with PKCE (S256) +
+    state; the atomic personal-tenant provisioning path is exercised on first sign-in.
+    Fixes made during bring-up: async `getAuth()` awaiting `database.ready()`; singular Prisma
+    delegate model names; `advanced.database.generateId` emits UUIDs to match `@db.Uuid` id
+    columns. Still open follow-ups: H-1 (persist `provider_email`/`email_verified`) and M-1
+    (provider-double integration test + no-orphan-user CI invariant).
+  - **⚠️ Schema tradeoff (CLAUDE.md rule 5):** per an explicit product decision, the Full Better
+    Auth schema migration (`20260919120000_better_auth_full_schema`) added provider
+    `access_token`/`refresh_token`/`id_token`/expiries/`scope`/`password` columns to
+    `external_identities`, relaxing minimal-token-retention. Revisit: encrypt-at-rest or prune.
 
 ## Foundation already in place (from prior branches)
 
@@ -56,8 +65,19 @@ _Last updated: 2026-09-17_
 
 ## Explicitly NOT enabled yet
 
-Authentication, OAuth callbacks, sessions, subscriptions, PATs, usage accounting, Sculpin
-forwarding, production proxy routes, Redis enforcement, admin bootstrap, Azure infra.
+Subscriptions/entitlements, PATs, usage accounting, production proxy routes (fail-closed
+registry still empty), Redis enforcement, Azure infra. (Authentication, OAuth callbacks,
+sessions, and admin bootstrap are now live per M2.)
+
+**⚠️ Dev-only blind forwarder present:** `apps/proxy/src/forward.ts` + `server.ts` route
+`/v1/*` straight to `SCULPIN_UPSTREAM_URL`, forwarding the caller's headers verbatim and NOT
+injecting the upstream credential. It is **gated to `NODE_ENV=development`** in
+`parseProxyConfig` (undefined upstream ⇒ `/v1/*` stays fail-closed 404), so it cannot activate
+in production. It is a temporary bring-up hack for local Sculpin smoke-testing and **still
+violates CLAUDE.md rules 1/3/4 in dev** (forwards caller PAT/cookies; no credential injection;
+blind route pass-through). It MUST be replaced by the fail-closed registry + centralized
+credential injection (Phase A of [`NEXT_PHASE_PLAN.md`](NEXT_PHASE_PLAN.md)) before any real
+test-case use.
 
 ## Uncommitted working-tree changes
 
@@ -66,7 +86,28 @@ forwarding, production proxy routes, Redis enforcement, admin bootstrap, Azure i
 - Scaffolding docs (this set) and `.claude/settings.local.json` sandbox read-allow for the
   Sculpin upstream (gitignored).
 
-## Next up
+## Next up — path to a real test-case scenario
 
-M2 identity (Google/GitHub OAuth; resolve ADR 004). Blocked on user input for the Sculpin
-tenant-mapping decision (DECISIONS "OPEN") before M3 catalogue design is finalized.
+Goal: a signed-in user mints a PAT and uses it with a stock OpenAI client against the Hub's
+`/v1`, which authenticates, authorizes, meters, and proxies to Sculpin. Thin vertical slice
+across M3/M5/M6/M7:
+
+- **Phase A — safe real proxy (M6 core).** Delete the blind forwarder. Register EXACTLY
+  `GET /v1/models` + `POST /v1/chat/completions` (SSE passthrough) in the fail-closed registry
+  via reviewed code. Centralize upstream-credential injection in one module: strip caller
+  `Authorization`/cookies/hop-by-hop, set `Authorization: Bearer ${OPENAI_DEV_API_KEY}`, never
+  leak the internal Sculpin URL. Fixed upstream base (no client-influenced target).
+- **Phase B — PAT auth (M5).** Mint `sclp_pat_<id>_<secret>` (CSPRNG, shown once), store only
+  HMAC-SHA-256 keyed digest (`PAT_HASH_SECRET` outside DB), constant-time verify. Gate `/v1/*`
+  on a valid PAT resolving to an active user/org.
+- **Phase C — catalogue + minimal entitlement (M3 + thin M4).** Admin-published model alias →
+  upstream agent id map (public alias only; internal ids never leaked). Minimal entitlement so
+  authz is not "any PAT calls anything": grant a trial subscription on provisioning.
+- **Phase D — metering + atomic quota (M7).** Usage events with no secrets/prompts/bodies;
+  atomic trial-quota reservation (tested at last quota under concurrency).
+
+Blocked on user input: the Sculpin tenant-mapping decision (DECISIONS "OPEN") shapes Phase C.
+
+Manual test prerequisites (user): SSH tunnel putting Sculpin on the configured
+`SCULPIN_UPSTREAM_URL`; Google redirect URI `http://localhost:3002/api/auth/callback/google`;
+real GitHub creds if GitHub sign-in is wanted.

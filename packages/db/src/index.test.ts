@@ -1,11 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { closeDatabase, createDatabase, getDatabase } from "./index.js";
+import {
+  closeDatabase,
+  createDatabase,
+  getDatabase,
+  type PrismaClientLike,
+} from "./index.js";
 
-const prismaClient = () =>
+type MockedPrisma = PrismaClientLike & {
+  $connect: ReturnType<typeof vi.fn>;
+  $disconnect: ReturnType<typeof vi.fn>;
+};
+
+const prismaClient = (): MockedPrisma =>
   ({
     $connect: vi.fn().mockResolvedValue(undefined),
     $disconnect: vi.fn().mockResolvedValue(undefined),
-  }) as never;
+  }) as unknown as MockedPrisma;
 
 afterEach(() => closeDatabase());
 
@@ -112,7 +122,7 @@ describe("database lifecycle", () => {
 
   it("closes deterministically while initialization is pending", async () => {
     const client = prismaClient();
-    let resolveFactory: (client: typeof client) => void = () => undefined;
+    let resolveFactory: (value: typeof client) => void = () => undefined;
     const factory = vi.fn(
       () => new Promise<typeof client>((resolve) => (resolveFactory = resolve)),
     );

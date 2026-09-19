@@ -40,6 +40,8 @@ export interface ProxyConfig extends CommonConfig {
   host: string;
   bodyLimitBytes: number;
   shutdownTimeoutMs: number;
+  /** Development-only Sculpin upstream. Undefined disables /v1 forwarding. */
+  sculpinUpstreamUrl?: string;
 }
 export interface WorkerConfig extends CommonConfig {
   shutdownTimeoutMs: number;
@@ -97,10 +99,7 @@ const bootstrapAdminEmails = z
   .pipe(
     z
       .array(
-        z
-          .string()
-          .max(254)
-          .email("must be a list of valid email addresses"),
+        z.string().max(254).email("must be a list of valid email addresses"),
       )
       .max(64),
   );
@@ -114,8 +113,7 @@ const authSchema = z.object({
     .string()
     .url()
     .refine(
-      (value) =>
-        value.startsWith("https://") || value.startsWith("http://"),
+      (value) => value.startsWith("https://") || value.startsWith("http://"),
       "must be an absolute http(s) origin",
     ),
   GOOGLE_CLIENT_ID: z.string().min(1),
@@ -141,7 +139,10 @@ function assertProductionAuthUrlSafety(
 }
 
 export function parseWebAuthConfig(input: NodeJS.ProcessEnv): AuthConfig {
-  const environment = parse(baseSchema.pick({ NODE_ENV: true }), input).NODE_ENV;
+  const environment = parse(
+    baseSchema.pick({ NODE_ENV: true }),
+    input,
+  ).NODE_ENV;
   const value = parse(authSchema, input);
   assertProductionAuthUrlSafety(environment, value.BETTER_AUTH_URL);
   return {
@@ -171,6 +172,15 @@ export function parseProxyConfig(input: NodeJS.ProcessEnv): ProxyConfig {
         .min(1000)
         .max(60000)
         .default(10000),
+      SCULPIN_UPSTREAM_URL: z
+        .string()
+        .url()
+        .refine(
+          (value) =>
+            value.startsWith("http://") || value.startsWith("https://"),
+          "must be an http(s) URL",
+        )
+        .optional(),
     })
     .superRefine((value, context) => {
       if (
@@ -186,13 +196,16 @@ export function parseProxyConfig(input: NodeJS.ProcessEnv): ProxyConfig {
       }
     });
   const value = parse(schema, input);
-  const result = {
+  const result: ProxyConfig = {
     ...common(value),
     port: value.PROXY_PORT,
     host: value.PROXY_HOST,
     bodyLimitBytes: value.PROXY_BODY_LIMIT_BYTES,
     shutdownTimeoutMs: value.PROXY_SHUTDOWN_TIMEOUT_MS,
   };
+  // Forwarding is a local development affordance only; never active outside it.
+  if (value.NODE_ENV === "development" && value.SCULPIN_UPSTREAM_URL)
+    result.sculpinUpstreamUrl = value.SCULPIN_UPSTREAM_URL;
   assertProductionDatabaseSafety(result);
   return result;
 }

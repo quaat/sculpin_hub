@@ -170,7 +170,7 @@ export function buildAuthOptions({
     // `name` map to existing columns; we deliberately do NOT add
     // email/emailVerified/image columns (ADR-004 / D-010).
     user: {
-      modelName: "users",
+      modelName: "user",
       fields: {
         email: "normalizedEmail",
         name: "displayName",
@@ -180,7 +180,7 @@ export function buildAuthOptions({
     // providerId -> provider, accountId -> providerSubject. Provider access/
     // refresh/id tokens are NOT persisted (minimal token retention).
     account: {
-      modelName: "externalIdentities",
+      modelName: "externalIdentity",
       fields: {
         providerId: "provider",
         accountId: "providerSubject",
@@ -194,7 +194,7 @@ export function buildAuthOptions({
       // deliberate, session-authenticated linking flow can be added later.
       accountLinking: { enabled: false },
     },
-    verification: { modelName: "verifications" },
+    verification: { modelName: "verification" },
     // Atomic personal-tenant provisioning (D-011) + admin bootstrap (D-010 item
     // 3). Both run inside the same interactive transaction that
     // `createOAuthUser` opened for the user + account inserts, so the personal
@@ -257,6 +257,11 @@ export function buildAuthOptions({
       },
     },
     advanced: {
+      // Our id columns are `@db.Uuid`; Better Auth's default id generator emits
+      // non-UUID base64-ish strings (e.g. starting with `T`), which Postgres
+      // rejects (P2023). Emit real UUIDs so inserts into every Better Auth table
+      // (user/account/session/verification) match the column type.
+      database: { generateId: () => globalThis.crypto.randomUUID() },
       // Force Secure cookies in production; host-scoped via cookiePrefix so the
       // library emits `__Secure-`/`__Host-`-style names behind the HTTPS edge.
       useSecureCookies: isProduction,
@@ -274,14 +279,25 @@ export function buildAuthOptions({
   } satisfies BetterAuthOptions;
 }
 
-let cached: ReturnType<typeof betterAuth> | undefined;
+let cached: Promise<ReturnType<typeof betterAuth>> | undefined;
 
 /**
  * Lazily construct the Better Auth server instance. Kept lazy so importing this
  * module (e.g. in the route handler) does not eagerly validate auth env at
- * build time; env is validated on first request, failing closed.
+ * build time; env is validated on first request, failing closed. The database's
+ * Prisma client is initialized (`ready()`) before the adapter reads it, because
+ * the `.prisma` getter throws until then and the auth path is the first thing to
+ * touch the DB. A rejected initialization is not cached, so the next request
+ * retries.
  */
-export function getAuth(): ReturnType<typeof betterAuth> {
-  cached ??= betterAuth(buildAuthOptions(resolveAuthDependencies()));
+export function getAuth(): Promise<ReturnType<typeof betterAuth>> {
+  cached ??= (async () => {
+    const deps = resolveAuthDependencies();
+    await deps.database.ready();
+    return betterAuth(buildAuthOptions(deps));
+  })().catch((error: unknown) => {
+    cached = undefined;
+    throw error;
+  });
   return cached;
 }

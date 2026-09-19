@@ -42,7 +42,7 @@ suite("personal tenant transaction", () => {
   it("commits user, identity, personal owner, membership, audit, and outbox atomically", async () => {
     const tx = new PostgresPersonalTenantTransaction(pool);
     const result = await tx.create(command("success-with-identity"));
-    const rows = await pool.query(
+    const rows = await pool.query<Record<string, unknown>>(
       "SELECT u.id AS user_id, e.provider_subject, o.personal_owner_user_id, m.role, a.action, ob.event_type, ob.payload FROM users u JOIN external_identities e ON e.user_id=u.id JOIN organizations o ON o.personal_owner_user_id=u.id JOIN organization_memberships m ON m.organization_id=o.id AND m.user_id=u.id JOIN audit_events a ON a.organization_id=o.id JOIN outbox_events ob ON ob.organization_id=o.id WHERE u.id=$1",
       [result.userId],
     );
@@ -55,7 +55,7 @@ suite("personal tenant transaction", () => {
       action: "personal_organization.created",
       event_type: "personal_organization.created",
     });
-    expect(rows.rows[0].payload).toEqual({
+    expect(rows.rows[0]?.payload).toEqual({
       organizationId: result.organizationId,
       userId: result.userId,
     });
@@ -86,7 +86,7 @@ suite("personal tenant transaction", () => {
     await expect(
       tx.create({
         ...command("duplicate-identity-other"),
-        identity: command("duplicate-identity").identity,
+        identity: command("duplicate-identity").identity!,
       }),
     ).rejects.toMatchObject({ code: "identity_conflict" });
     await expect(

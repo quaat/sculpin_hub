@@ -10,6 +10,7 @@ import type { ProxyConfig } from "@sculpin/config";
 import { createDatabase, type Database } from "@sculpin/db";
 import { createLogger } from "@sculpin/observability";
 import { isV1Path, mapProxyError } from "./errors.js";
+import { createForwardHandler } from "./forward.js";
 import {
   emptyProductionRouteRegistry,
   registerRoutes,
@@ -95,11 +96,13 @@ export function createProxyServer(
     });
   });
   registerRoutes(server, dependencies.registry);
-  const unsupported = (_request: unknown, reply: FastifyReply) =>
-    reply.code(404).send(unsupportedOperation());
-  server.all("/v1", unsupported);
-  server.all("/v1/", unsupported);
-  server.all("/v1/*", unsupported);
+  const v1Handler = config.sculpinUpstreamUrl
+    ? createForwardHandler(config.sculpinUpstreamUrl)
+    : (_request: unknown, reply: FastifyReply) =>
+        reply.code(404).send(unsupportedOperation());
+  server.all("/v1", v1Handler);
+  server.all("/v1/", v1Handler);
+  server.all("/v1/*", v1Handler);
   server.setErrorHandler((error, request, reply) => {
     const mapped = mapProxyError(error);
     const level = mapped.statusCode >= 500 ? "error" : "warn";

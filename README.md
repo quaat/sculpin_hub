@@ -40,13 +40,23 @@ Stop dependencies with `docker compose down`. Reset all local data with `docker 
 
 ```bash
 pnpm dev                              # all applications
-pnpm --filter @sculpin/web dev        # http://localhost:3000
+pnpm --filter @sculpin/web dev        # http://localhost:3002
 pnpm --filter @sculpin/proxy dev      # http://127.0.0.1:3001
 pnpm --filter @sculpin/worker dev     # readiness check, then intentionally idle
 pnpm env:smoke                        # verify all workspaces can load root .env (values redacted)
 ```
 
-Web pages: `/`, `/products`, `/pricing`, `/dashboard`, and `/documentation`. Web health is `/api/health/live` and `/api/health/ready`; proxy health is `/health/live` and `/health/ready`. Readiness is `503` when PostgreSQL cannot answer. Every unregistered proxy `/v1/*` route returns a normalized unsupported-operation response and is never forwarded.
+Web pages: `/`, `/products`, `/pricing`, `/dashboard`, and `/documentation`. Web health is `/api/health/live` and `/api/health/ready`; proxy health is `/health/live` and `/health/ready`. Readiness is `503` when PostgreSQL cannot answer. By default every unregistered proxy `/v1/*` route returns a normalized unsupported-operation response and is never forwarded.
+
+### Development-only Sculpin forwarding
+
+To point the proxy at a local Sculpin instance (for example one exposed over reverse port forwarding), set `SCULPIN_UPSTREAM_URL` in `.env`:
+
+```bash
+SCULPIN_UPSTREAM_URL=http://localhost:3000
+```
+
+When set **and** `NODE_ENV=development`, the proxy forwards every `/v1`, `/v1/`, and `/v1/*` request to that upstream — relaying method, path, query, headers, and body, and returning the upstream status, headers, and body unchanged. A trusted `x-request-id` is always injected. Leaving the variable empty restores the default unsupported-operation behavior. The value is ignored outside development, so production still forwards nothing.
 
 ## Validate
 
@@ -83,7 +93,7 @@ The script verifies non-root image users, web/proxy liveness and PostgreSQL read
 
 Public readiness returns only `ready`/`not_ready` and the service name. Dependency names remain internal to reduce infrastructure disclosure. Redis is not a readiness dependency because no workload uses it yet.
 
-The production Sculpin route registry remains empty. `/v1`, `/v1/`, and every unregistered nested `/v1/*` operation return a normalized error and are never forwarded.
+The production Sculpin route registry remains empty. In production `/v1`, `/v1/`, and every unregistered nested `/v1/*` operation return a normalized error and are never forwarded. The only exception is the development-only `SCULPIN_UPSTREAM_URL` passthrough described above, which is inert outside `NODE_ENV=development`.
 
 ## Architecture and next work
 

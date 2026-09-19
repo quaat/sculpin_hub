@@ -50,6 +50,32 @@ describe("runtime configuration", () => {
     expect(message).not.toBe("");
     expect(message).not.toContain("canary-secret");
   });
+  it("enables the Sculpin upstream only in development", () => {
+    expect(
+      parseProxyConfig({
+        ...valid,
+        NODE_ENV: "development",
+        DATABASE_URL: "postgresql://user:pass@localhost:5432/dev",
+        SCULPIN_UPSTREAM_URL: "http://localhost:3990",
+      }).sculpinUpstreamUrl,
+    ).toBe("http://localhost:3990");
+    expect(
+      parseProxyConfig({
+        ...valid,
+        SCULPIN_UPSTREAM_URL: "http://localhost:3990",
+      }).sculpinUpstreamUrl,
+    ).toBeUndefined();
+  });
+  it("rejects a non-http Sculpin upstream", () => {
+    expect(() =>
+      parseProxyConfig({
+        ...valid,
+        NODE_ENV: "development",
+        DATABASE_URL: "postgresql://user:pass@localhost:5432/dev",
+        SCULPIN_UPSTREAM_URL: "ftp://localhost:3990",
+      }),
+    ).toThrow("SCULPIN_UPSTREAM_URL");
+  });
   it("requires deliberate production binding", () => {
     expect(() =>
       parseProxyConfig({ ...valid, NODE_ENV: "production", PROXY_HOST: "" }),
@@ -83,9 +109,9 @@ describe("web auth configuration", () => {
     ]);
   });
   it("fails closed when required auth env is missing", () => {
-    expect(() =>
-      parseWebAuthConfig({ NODE_ENV: "test" }),
-    ).toThrow("BETTER_AUTH_SECRET");
+    expect(() => parseWebAuthConfig({ NODE_ENV: "test" })).toThrow(
+      "BETTER_AUTH_SECRET",
+    );
   });
   it("rejects a short auth secret", () => {
     expect(() =>

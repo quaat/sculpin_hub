@@ -52,18 +52,22 @@ describe("buildAuthOptions", () => {
 
   it("maps user and account models onto canonical tables without token columns", () => {
     const options = buildAuthOptions({ config, database });
-    expect(options.user?.modelName).toBe("users");
+    // modelName is the Prisma delegate (model) name, not the mapped table name;
+    // Better Auth indexes the client via `prisma[modelName]`, so these must be
+    // the camelCase model names (`user`, `externalIdentity`, `verification`),
+    // NOT the plural `@@map` table names.
+    expect(options.user?.modelName).toBe("user");
     expect(options.user?.fields).toMatchObject({
       email: "normalizedEmail",
       name: "displayName",
     });
-    expect(options.account?.modelName).toBe("externalIdentities");
+    expect(options.account?.modelName).toBe("externalIdentity");
     expect(options.account?.fields).toMatchObject({
       providerId: "provider",
       accountId: "providerSubject",
     });
     // No verification/account token persistence knobs are enabled.
-    expect(options.verification?.modelName).toBe("verifications");
+    expect(options.verification?.modelName).toBe("verification");
   });
 
   it("uses database sessions with no cookie cache", () => {

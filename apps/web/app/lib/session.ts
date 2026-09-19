@@ -15,9 +15,10 @@ import { getAuth } from "./auth";
  */
 export async function getSession(): Promise<Session | null> {
   const requestHeaders = await headers();
-  return getAuth().api.getSession({ headers: requestHeaders });
+  const auth = await getAuth();
+  return auth.api.getSession({ headers: requestHeaders });
 }
 
 export type Session = Awaited<
-  ReturnType<ReturnType<typeof getAuth>["api"]["getSession"]>
+  ReturnType<Awaited<ReturnType<typeof getAuth>>["api"]["getSession"]>
 >;
