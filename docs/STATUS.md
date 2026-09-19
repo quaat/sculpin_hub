@@ -111,8 +111,8 @@ across M3/M5/M6/M7:
 - **Phase A — safe real proxy (M6 core).** Delete the blind forwarder. Register EXACTLY
   `GET /v1/models` + `POST /v1/chat/completions` (SSE passthrough) in the fail-closed registry
   via reviewed code. Centralize upstream-credential injection in one module: strip caller
-  `Authorization`/cookies/hop-by-hop, set `Authorization: Bearer ${OPENAI_DEV_API_KEY}`, never
-  leak the internal Sculpin URL. Fixed upstream base (no client-influenced target).
+  `Authorization`/cookies/hop-by-hop, set `Authorization: Bearer ${SCULPIN_UPSTREAM_API_KEY}`,
+  never leak the internal `SCULPIN_UPSTREAM_URL`. Fixed upstream base (no client-influenced target).
 - **Phase B — PAT auth (M5).** Mint `sclp_pat_<id>_<secret>` (CSPRNG, shown once), store only
   HMAC-SHA-256 keyed digest (`PAT_HASH_SECRET` outside DB), constant-time verify. Gate `/v1/*`
   on a valid PAT resolving to an active user/org.

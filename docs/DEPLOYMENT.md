@@ -12,8 +12,8 @@ This is the operational summary; it will be filled in during M8.
 - Managed PostgreSQL; managed Redis only if/when rate limiting needs a shared atomic store
   (PG-backed limiting is the initial approach).
 - **Secrets via Azure Key Vault + managed identity.** No secrets in images, IaC, or `.env`
-  committed to the repo. `OPENAI_DEV_API_KEY` and `PAT_HASH_SECRET` live only in the secret
-  manager and are injected as process env at runtime.
+  committed to the repo. `SCULPIN_UPSTREAM_API_KEY` and `PAT_HASH_SECRET` live only in the
+  secret manager and are injected as process env at runtime.
 
 ## Connectivity to Sculpin
 

@@ -58,8 +58,9 @@ Replace the dev-only blind forwarder with the reviewed, fail-closed data plane.
     `data: <json>\n\n` / `: keep-alive\n\n` / `data: [DONE]`).
 - Centralize upstream-credential handling in **one** module:
   - Strip the caller's `Authorization`, cookies, and all hop-by-hop headers.
-  - Set `Authorization: Bearer ${OPENAI_DEV_API_KEY}` (env `OPENAI_COMPAT_DEV_API_KEY` upstream
-    per M0 discovery). This credential never touches the DB, browsers, logs, or responses.
+  - Set `Authorization: Bearer ${SCULPIN_UPSTREAM_API_KEY}` (the Hub-owned deployment name;
+    Sculpin's own upstream env is `OPENAI_COMPAT_DEV_API_KEY` per M0 discovery). This
+    credential never touches the DB, browsers, logs, or responses.
   - Fixed upstream base URL from validated config; no client-influenced target (no SSRF); the
     internal Sculpin URL is never leaked to clients.
 - Map the public model alias to the upstream agent id at the edge (thin, hard-coded until M3).

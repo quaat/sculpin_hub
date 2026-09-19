@@ -15,7 +15,7 @@ Operational runbook scaffold. Detailed observability/SLO design is in the long-f
 
 - Structured logs with request/correlation IDs. **No body logging by default.**
 - Redaction covers `upstreamCredential` / `upstream_credentials` and must extend to any PAT,
-  OAuth token, prompt, or model response. Never log `OPENAI_DEV_API_KEY`.
+  OAuth token, prompt, or model response. Never log `SCULPIN_UPSTREAM_API_KEY`.
 
 ## Metrics to track (as they come online)
 
@@ -31,7 +31,7 @@ propagation time, usage-accounting accuracy.
 
 - **DB migration:** apply reviewed Prisma migrations via `db:migrate:deploy` release job;
   verify with `db:migration:test` against a disposable DB.
-- **Secret rotation:** rotate `OPENAI_DEV_API_KEY` and `PAT_HASH_SECRET` in Key Vault. Rotating
+- **Secret rotation:** rotate `SCULPIN_UPSTREAM_API_KEY` and `PAT_HASH_SECRET` in Key Vault. Rotating
   `PAT_HASH_SECRET` invalidates existing PAT digests — plan a re-issue/rotation window.
 - **Admin bootstrap:** first admin via `BOOTSTRAP_ADMIN_EMAILS`; every admin action audited.
 - **Local deps:** `docker compose up -d postgres redis`; reset with `down --volumes` (destructive).

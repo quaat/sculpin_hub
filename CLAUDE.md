@@ -27,11 +27,11 @@ These come from the mission and MUST hold in every change:
    secret (key `PAT_HASH_SECRET`, kept OUTSIDE the DB). Verify in constant time. A DB leak
    must not yield usable tokens.
 3. **Never forward the caller's PAT, cookies, or `Authorization` upstream.** Replace with
-   `Authorization: Bearer ${OPENAI_DEV_API_KEY}`. Centralize upstream-credential handling in
-   one module. That credential never touches the DB, browsers, logs, usage events, error
-   pages, or API responses.
-4. **Never expose the internal Sculpin URL** to clients. No user/admin-supplied upstream URLs
-   (no SSRF). Strip hop-by-hop headers.
+   `Authorization: Bearer ${SCULPIN_UPSTREAM_API_KEY}`. Centralize upstream-credential
+   handling in one module. That credential never touches the DB, browsers, logs, usage
+   events, error pages, or API responses.
+4. **Never expose the internal Sculpin URL** (`SCULPIN_UPSTREAM_URL`) to clients. No
+   user/admin-supplied upstream URLs (no SSRF). Strip hop-by-hop headers.
 5. **Never log** secrets, bearer tokens, prompts, or model responses. No request/response
    body logging by default. Usage accounting records neither raw PATs, OAuth tokens, the
    upstream key, complete bodies, prompts, nor generated responses.
