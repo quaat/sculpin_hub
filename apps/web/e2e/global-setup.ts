@@ -114,8 +114,21 @@ export default async function globalSetup(): Promise<void> {
     const catalogueRepo = new PostgresCatalogueRepository(database.pool);
     const planRepo = new PostgresPlanRepository(database.pool);
 
-    const entry = await catalogueRepo.create(SEEDED_CATALOGUE, adminUserId);
-    await catalogueRepo.publish(entry.id, adminUserId);
+    // §10 audit: every mutating repo call records an audit row and takes a safe
+    // correlation id. Seed writes are admin-attributed, exactly as the real UI.
+    const seedRequestId = (label: string): string =>
+      `e2e-seed-${label}-${randomUUID()}`;
+
+    const entry = await catalogueRepo.create(
+      SEEDED_CATALOGUE,
+      adminUserId,
+      seedRequestId("catalogue-create"),
+    );
+    await catalogueRepo.publish(
+      entry.id,
+      adminUserId,
+      seedRequestId("catalogue-publish"),
+    );
 
     const plan = await planRepo.create(
       {
@@ -127,9 +140,20 @@ export default async function globalSetup(): Promise<void> {
         requestQuota: SEEDED_PLAN.requestQuota,
       },
       adminUserId,
+      seedRequestId("plan-create"),
     );
-    await planRepo.attachCatalogueEntry(plan.id, entry.id);
-    await planRepo.setPublished(plan.id, true, adminUserId);
+    await planRepo.attachCatalogueEntry(
+      plan.id,
+      entry.id,
+      adminUserId,
+      seedRequestId("plan-attach"),
+    );
+    await planRepo.setPublished(
+      plan.id,
+      true,
+      adminUserId,
+      seedRequestId("plan-publish"),
+    );
   } finally {
     await database.close();
   }
