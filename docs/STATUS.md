@@ -187,12 +187,18 @@ centralized credential injection in M6/M7 — NOT as an unauthenticated intermed
   proxy-projection test)).
   `db:migration:test` drift-free. Note: the outbox suite now clears `outbox_events` in its
   `beforeAll` to own the table (fixes a pre-existing cross-suite ordering flake; see D-016).
-- **Stage F end-to-end (D-018):** `pnpm test:e2e` (`scripts/run-proxy-e2e.mjs`, ephemeral DB) drives
-  the real secure proxy with the **stock `openai` SDK** (7.20.0) against a fake in-process Sculpin —
-  **6/6** green: lists only the published alias, non-stream + SSE chat pass through, unknown model →
-  404 and drained quota → 429 (neither calls upstream), bogus PAT → 401, and the fake Sculpin sees the
-  Hub bearer + rewritten agent id but NEITHER the caller PAT NOR cookies. The suite is
-  `RUN_PROXY_E2E`-guarded (skipped/offline in the normal proxy unit run: 47 pass, 6 skipped).
+- **Stage F end-to-end (D-018; expanded S14):** `pnpm test:e2e` (`scripts/run-proxy-e2e.mjs`,
+  ephemeral DB) drives the real secure proxy with the **stock `openai` SDK** (7.20.0) against a fake
+  in-process Sculpin — **10 cases**: lists only the published alias, non-stream + SSE chat pass
+  through, unknown model → 404 and drained quota → 429 (neither calls upstream), bogus PAT → 401, and
+  the fake Sculpin sees the Hub bearer + rewritten agent id but NEITHER the caller PAT NOR cookies.
+  **S14 adds:** a revoked PAT → 401 immediately; a PAT scoped away from the alias → 404 without an
+  upstream call; conversation isolation proven at the SDK edge (a caller-forged
+  `x-exodus-conversation-id` + `x-agent-platform-include-metadata` are never relayed upstream, and the
+  upstream conversation/`server` response headers are never returned to the client); and the S13
+  metering proof — a served request writes exactly one `usage_events` row (correct catalogue-entry id,
+  PAT ROW id, `quota_cost=1`, no secret) while a 404 writes none. The suite is `RUN_PROXY_E2E`-guarded
+  (skipped/offline in the normal proxy unit run: 67 pass, 10 skipped).
 - **Env caveat:** the sandbox pins Node to v26 while the repo targets `22.22.2`. `turbo` fails
   with "cannot find package manager binary" until the nvm `v22.22.2/bin` dir is on `PATH`
   (which supplies a real `pnpm` shim); with that prefix the standard `pnpm lint|typecheck|test`

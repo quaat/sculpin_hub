@@ -70,6 +70,16 @@ const SSE_FRAMES = [
   "data: [DONE]\n\n",
 ].join("");
 
+// Client-supplied headers the caller must NEVER be able to smuggle upstream
+// (conversation isolation, S11/D-022): a raw upstream conversation id and the
+// metadata opt-in are dropped at the Hub, never relayed to Sculpin.
+const SMUGGLED_HEADERS = {
+  cookie: "session=leak",
+  "x-random-header": "nope",
+  "x-exodus-conversation-id": "client-forged-conversation",
+  "x-agent-platform-include-metadata": "true",
+} as const;
+
 function readBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = "";
@@ -86,7 +96,20 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
   let baseURL: string;
   let goodToken: string;
   let drainedToken: string;
+  let scopedToken: string;
+  let revokedToken: string;
+  let primaryOrgId: string;
+  let primaryPatId: string;
+  let supportEntryId: string;
   const captured: CapturedUpstreamRequest[] = [];
+
+  async function usageRowCount(organizationId: string): Promise<number> {
+    const { rows } = await database.pool.query<{ n: string }>(
+      "SELECT count(*)::text AS n FROM usage_events WHERE organization_id=$1",
+      [organizationId],
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
 
   beforeAll(async () => {
     if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required.");
@@ -100,11 +123,25 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
           ? (JSON.parse(rawBody) as { model?: string; stream?: boolean })
           : {};
         captured.push({ headers: request.headers, rawBody, body });
+        // Upstream conversation headers the Hub must NEVER return to the client
+        // (S11/D-022). They are emitted here to prove the response allowlist
+        // strips them at the edge.
+        const upstreamResponseHeaders = {
+          "x-exodus-conversation-id": "internal-conversation-header",
+          "x-exodus-conversation-reused": "false",
+          server: "uvicorn",
+        };
         if (body.stream) {
-          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.writeHead(200, {
+            "content-type": "text/event-stream",
+            ...upstreamResponseHeaders,
+          });
           response.end(SSE_FRAMES);
         } else {
-          response.writeHead(200, { "content-type": "application/json" });
+          response.writeHead(200, {
+            "content-type": "application/json",
+            ...upstreamResponseHeaders,
+          });
           response.end(JSON.stringify(COMPLETION_BODY));
         }
       })();
@@ -126,6 +163,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       organizationSlug: "e2e-user-org",
       requestId: "e2e-user",
     });
+    primaryOrgId = primary.organizationId;
     const catalogue = new PostgresCatalogueRepository(database.pool);
     const entry = await catalogue.create(
       {
@@ -136,14 +174,43 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       primary.userId,
     );
     await catalogue.publish(entry.id, primary.userId);
+    supportEntryId = entry.id;
+    // A second catalogue entry that EXISTS (so a PAT may scope to it) but is
+    // never published/entitled — used to prove PAT-scope exclusion yields 404.
+    const premiumEntry = await catalogue.create(
+      {
+        publicAlias: "premium",
+        upstreamAgentId: "agent-premium-e2e",
+        displayName: "Premium",
+      },
+      primary.userId,
+    );
     const pat = new PostgresPatService(database.pool, PAT_HASH_KEYRING);
-    goodToken = (
+    const primaryPat = await pat.mint({
+      userId: primary.userId,
+      organizationId: primary.organizationId,
+      name: "e2e-primary",
+    });
+    goodToken = primaryPat.token;
+    primaryPatId = primaryPat.record.id;
+    // A PAT scoped to ONLY the premium entry: it may never reach `support`
+    // (authorized = entitled ∩ scopes), so a support request is a 404.
+    scopedToken = (
       await pat.mint({
         userId: primary.userId,
         organizationId: primary.organizationId,
-        name: "e2e-primary",
+        name: "e2e-scoped-premium",
+        scopeCatalogueEntryIds: [premiumEntry.id],
       })
     ).token;
+    // A PAT minted then immediately revoked: revocation must take effect at once.
+    const toRevoke = await pat.mint({
+      userId: primary.userId,
+      organizationId: primary.organizationId,
+      name: "e2e-revoked",
+    });
+    revokedToken = toRevoke.token;
+    await pat.revoke(toRevoke.record.id, primary.userId);
 
     // A second tenant whose quota is fully drained, to prove 429 fail-closed.
     const secondary = await tenant.create({
@@ -202,8 +269,9 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
     return new OpenAI({
       apiKey: token,
       baseURL,
-      // Extra caller headers that MUST NOT be forwarded to Sculpin.
-      defaultHeaders: { cookie: "session=leak", "x-random-header": "nope" },
+      // Extra caller headers that MUST NOT be forwarded to Sculpin (incl. a
+      // client-forged upstream conversation id and the metadata opt-in).
+      defaultHeaders: { ...SMUGGLED_HEADERS },
       maxRetries: 0,
     });
   }
@@ -234,6 +302,12 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
     expect(upstream?.headers.authorization).toBe(`Bearer ${UPSTREAM_KEY}`);
     expect(upstream?.headers.cookie).toBeUndefined();
     expect(upstream?.headers["x-random-header"]).toBeUndefined();
+    // Conversation isolation (S11/D-022): a caller-forged upstream conversation
+    // id and the metadata opt-in are NEVER relayed to Sculpin.
+    expect(upstream?.headers["x-exodus-conversation-id"]).toBeUndefined();
+    expect(
+      upstream?.headers["x-agent-platform-include-metadata"],
+    ).toBeUndefined();
     // The caller's raw PAT never appears anywhere in the upstream request.
     const patPublicId = goodToken.split("_")[2];
     expect(patPublicId).toBeTruthy();
@@ -285,5 +359,77 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
     await expect(
       client(`sclp_pat_${"Z".repeat(22)}_${"z".repeat(43)}`).models.list(),
     ).rejects.toMatchObject({ status: 401 });
+  });
+
+  it("rejects a revoked PAT with 401 immediately", async () => {
+    await expect(client(revokedToken).models.list()).rejects.toMatchObject({
+      status: 401,
+    });
+  });
+
+  it("returns 404 for a model excluded by the PAT scope, without calling upstream", async () => {
+    const before = captured.length;
+    await expect(
+      client(scopedToken).chat.completions.create({
+        model: PUBLIC_ALIAS,
+        messages: [{ role: "user", content: "x" }],
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(captured.length).toBe(before);
+  });
+
+  it("never returns the upstream conversation headers to the client (S11)", async () => {
+    const { response } = await client(goodToken)
+      .chat.completions.create({
+        model: PUBLIC_ALIAS,
+        messages: [{ role: "user", content: "hi" }],
+      })
+      .withResponse();
+    // The response the SDK sees carries ONLY the safe allowlist — the upstream
+    // conversation headers and server banner are stripped at the edge.
+    expect(response.headers.get("x-exodus-conversation-id")).toBeNull();
+    expect(response.headers.get("x-exodus-conversation-reused")).toBeNull();
+    expect(response.headers.get("server")).toBeNull();
+  });
+
+  it("records exactly one usage event per served request and none for denials", async () => {
+    const beforeGrant = await usageRowCount(primaryOrgId);
+    await client(goodToken).chat.completions.create({
+      model: PUBLIC_ALIAS,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(await usageRowCount(primaryOrgId)).toBe(beforeGrant + 1);
+    // The newest usage row carries only safe correlation ids: the resolved
+    // catalogue-entry id, the PAT ROW id (never the token secret), and cost 1.
+    const { rows } = await database.pool.query<{
+      catalogue_entry_id: string;
+      pat_id: string;
+      quota_cost: number;
+      request_id: string;
+    }>(
+      `SELECT catalogue_entry_id, pat_id, quota_cost, request_id
+       FROM usage_events WHERE organization_id=$1
+       ORDER BY occurred_at DESC LIMIT 1`,
+      [primaryOrgId],
+    );
+    expect(rows[0]).toMatchObject({
+      catalogue_entry_id: supportEntryId,
+      pat_id: primaryPatId,
+      quota_cost: 1,
+    });
+    // No secret ever lands in the usage row.
+    const patSecret = goodToken.split("_")[3];
+    expect(patSecret).toBeTruthy();
+    expect(JSON.stringify(rows[0])).not.toContain(patSecret!);
+
+    // A denied request (unknown model → 404) writes NO usage event.
+    const afterGrant = await usageRowCount(primaryOrgId);
+    await expect(
+      client(goodToken).chat.completions.create({
+        model: "ghost",
+        messages: [{ role: "user", content: "x" }],
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(await usageRowCount(primaryOrgId)).toBe(afterGrant);
   });
 });
