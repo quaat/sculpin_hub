@@ -65,14 +65,26 @@ export interface PatHashKeyring {
   readonly keys: ReadonlyMap<number, string>;
 }
 
-export interface DataPlaneConfig {
-  hubPublicUrl: string;
-  sculpinUpstreamUrl: string;
-  sculpinUpstreamApiKey: string;
+/**
+ * Least-privilege PAT-hashing configuration for the WEB control plane.
+ *
+ * Minting, verifying, and revoking PATs needs ONLY the keyed HMAC keyring (kept
+ * OUTSIDE the DB) — it does NOT need the data plane's request-serving upstream
+ * target or credential. This slice lets the web app hold just the PAT secret,
+ * so a compromised control plane cannot read the upstream Sculpin key. The data
+ * plane composes this same shape into its own broader `DataPlaneConfig`.
+ */
+export interface PatConfig {
   /** The CURRENT PAT hash secret (raw), i.e. `keys.get(currentVersion)`. */
   patHashSecret: string;
   /** Full keyring for constructing the PAT service (rotation-aware). */
   patHashKeyring: PatHashKeyring;
+}
+
+export interface DataPlaneConfig extends PatConfig {
+  hubPublicUrl: string;
+  sculpinUpstreamUrl: string;
+  sculpinUpstreamApiKey: string;
 }
 
 /**
@@ -286,15 +298,11 @@ const patRetiredKeys = z
     ),
   );
 
-const dataPlaneSchema = z.object({
-  NODE_ENV: environmentSchema.default("development"),
-  // The canonical, public Hub origin used to render connection instructions
-  // (never derived from a request Host header).
-  HUB_PUBLIC_URL: httpUrl,
-  // Deployment-only upstream target. Never sourced from a request/catalogue/PAT.
-  SCULPIN_UPSTREAM_URL: httpUrl,
-  // Server secret the Hub sends to Sculpin as `Authorization: Bearer ...`.
-  SCULPIN_UPSTREAM_API_KEY: z.string().min(1).max(4096),
+// The PAT-hashing env slice, shared by the least-privilege web `parsePatConfig`
+// and the broader `parseDataPlaneConfig`. Deliberately carries NO upstream URL
+// or upstream credential — a control plane that only mints/verifies PATs must
+// not be forced to hold the data plane's request-serving Sculpin key.
+const patHashSchema = z.object({
   // Keyed HMAC secret for PAT verification, held OUTSIDE the database. This is
   // the CURRENT key.
   PAT_HASH_SECRET: z.string().min(32, "must be at least 32 characters").max(512),
@@ -307,6 +315,52 @@ const dataPlaneSchema = z.object({
     .default(1),
   // Optional retired keys so pre-rotation tokens still verify.
   PAT_HASH_SECRET_RETIRED: patRetiredKeys,
+});
+
+// Build the rotation-aware keyring from the parsed PAT-hash env. Sets retired
+// keys first, then the CURRENT key last so it is authoritative for its version.
+// A retired entry that names the CURRENT version is a collision — fail closed
+// rather than silently overriding.
+function buildPatConfig(value: z.infer<typeof patHashSchema>): PatConfig {
+  const currentVersion = value.PAT_HASH_KEY_VERSION;
+  const keys = new Map<number, string>();
+  for (const [rawVersion, secret] of Object.entries(
+    value.PAT_HASH_SECRET_RETIRED,
+  )) {
+    const version = Number(rawVersion);
+    if (version === currentVersion)
+      throw new Error(
+        "Invalid runtime configuration. Check: PAT_HASH_SECRET_RETIRED version collision.",
+      );
+    keys.set(version, secret);
+  }
+  keys.set(currentVersion, value.PAT_HASH_SECRET);
+  return {
+    patHashSecret: value.PAT_HASH_SECRET,
+    patHashKeyring: { currentVersion, keys },
+  };
+}
+
+/**
+ * Parse and validate ONLY the PAT-hashing configuration (least privilege for the
+ * web control plane). Fails closed with a secret-safe, field-name-only error.
+ * Deliberately does NOT require `SCULPIN_UPSTREAM_URL` or
+ * `SCULPIN_UPSTREAM_API_KEY`: minting/verifying PATs must never force the web app
+ * to hold the data plane's upstream Sculpin credential.
+ */
+export function parsePatConfig(input: NodeJS.ProcessEnv): PatConfig {
+  return buildPatConfig(parse(patHashSchema, input));
+}
+
+const dataPlaneSchema = patHashSchema.extend({
+  NODE_ENV: environmentSchema.default("development"),
+  // The canonical, public Hub origin used to render connection instructions
+  // (never derived from a request Host header).
+  HUB_PUBLIC_URL: httpUrl,
+  // Deployment-only upstream target. Never sourced from a request/catalogue/PAT.
+  SCULPIN_UPSTREAM_URL: httpUrl,
+  // Server secret the Hub sends to Sculpin as `Authorization: Bearer ...`.
+  SCULPIN_UPSTREAM_API_KEY: z.string().min(1).max(4096),
 });
 
 /**
@@ -325,28 +379,11 @@ export function parseDataPlaneConfig(input: NodeJS.ProcessEnv): DataPlaneConfig 
       "Invalid runtime configuration. Check: HUB_PUBLIC_URL production safety.",
     );
   }
-  const currentVersion = value.PAT_HASH_KEY_VERSION;
-  // Build the keyring from retired keys, then set the CURRENT key last so it is
-  // authoritative for its version. A retired entry that names the CURRENT
-  // version is a collision — fail closed rather than silently overriding.
-  const keys = new Map<number, string>();
-  for (const [rawVersion, secret] of Object.entries(
-    value.PAT_HASH_SECRET_RETIRED,
-  )) {
-    const version = Number(rawVersion);
-    if (version === currentVersion)
-      throw new Error(
-        "Invalid runtime configuration. Check: PAT_HASH_SECRET_RETIRED version collision.",
-      );
-    keys.set(version, secret);
-  }
-  keys.set(currentVersion, value.PAT_HASH_SECRET);
   return {
     hubPublicUrl: value.HUB_PUBLIC_URL,
     sculpinUpstreamUrl: value.SCULPIN_UPSTREAM_URL,
     sculpinUpstreamApiKey: value.SCULPIN_UPSTREAM_API_KEY,
-    patHashSecret: value.PAT_HASH_SECRET,
-    patHashKeyring: { currentVersion, keys },
+    ...buildPatConfig(value),
   };
 }
 const discoverySchema = z.object({

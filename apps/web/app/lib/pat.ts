@@ -4,7 +4,7 @@ import type {
   PatIdentity,
   PatRecord,
 } from "@sculpin/domain";
-import { parseDataPlaneConfig } from "@sculpin/config";
+import { parsePatConfig } from "@sculpin/config";
 import { resolveAuthDependencies } from "./auth";
 import { requireUser, AuthzError, type AuthzDeps } from "./session";
 
@@ -53,7 +53,9 @@ async function resolveService(
   defaultServicePromise ??= (async () => {
     const { database } = resolveAuthDependencies();
     await database.ready();
-    const { patHashKeyring } = parseDataPlaneConfig(process.env);
+    // Least privilege: the web control plane needs ONLY the PAT keyring, never
+    // the data plane's upstream Sculpin URL/credential (S7 web/data-plane split).
+    const { patHashKeyring } = parsePatConfig(process.env);
     return new PostgresPatService(database.pool, patHashKeyring);
   })();
   return defaultServicePromise;

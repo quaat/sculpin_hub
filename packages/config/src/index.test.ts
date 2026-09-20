@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseDataPlaneConfig,
   parseDiscoveryConfig,
+  parsePatConfig,
   parseProxyConfig,
   parseWebAuthConfig,
   parseWebConfig,
@@ -123,6 +124,65 @@ describe("web auth configuration", () => {
         BETTER_AUTH_URL: "http://hub.example.com",
       }),
     ).toThrow("BETTER_AUTH_URL production safety");
+  });
+});
+
+describe("PAT-hash configuration (least privilege)", () => {
+  const validPat = {
+    PAT_HASH_SECRET: "unit-test-pat-hash-secret-32chars!!!",
+  };
+  it("parses the keyring from only the PAT secret", () => {
+    const { patHashSecret, patHashKeyring } = parsePatConfig(validPat);
+    expect(patHashSecret).toBe("unit-test-pat-hash-secret-32chars!!!");
+    expect(patHashKeyring.currentVersion).toBe(1);
+    expect(patHashKeyring.keys.get(1)).toBe(
+      "unit-test-pat-hash-secret-32chars!!!",
+    );
+    expect(patHashKeyring.keys.size).toBe(1);
+  });
+  it("does NOT require the data-plane upstream URL or credential", () => {
+    // The whole point of S7: minting/verifying PATs must not force the web
+    // control plane to hold the upstream Sculpin key or URL.
+    expect(() => parsePatConfig(validPat)).not.toThrow();
+  });
+  it("merges retired keys while keeping the current key", () => {
+    const retired = "retired-pat-hash-secret-32chars-long!";
+    const { patHashKeyring } = parsePatConfig({
+      ...validPat,
+      PAT_HASH_KEY_VERSION: "2",
+      PAT_HASH_SECRET_RETIRED: JSON.stringify({ "1": retired }),
+    });
+    expect(patHashKeyring.currentVersion).toBe(2);
+    expect(patHashKeyring.keys.get(2)).toBe(
+      "unit-test-pat-hash-secret-32chars!!!",
+    );
+    expect(patHashKeyring.keys.get(1)).toBe(retired);
+  });
+  it("fails closed on a retired-version collision", () => {
+    expect(() =>
+      parsePatConfig({
+        ...validPat,
+        PAT_HASH_KEY_VERSION: "1",
+        PAT_HASH_SECRET_RETIRED: JSON.stringify({
+          "1": "another-pat-hash-secret-32chars-long!",
+        }),
+      }),
+    ).toThrow("PAT_HASH_SECRET_RETIRED version collision");
+  });
+  it("rejects a short PAT hash secret", () => {
+    expect(() => parsePatConfig({ PAT_HASH_SECRET: "too-short" })).toThrow(
+      "PAT_HASH_SECRET",
+    );
+  });
+  it("does not echo the secret in errors", () => {
+    let message = "";
+    try {
+      parsePatConfig({ PAT_HASH_SECRET: "too-short-canary" });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("PAT_HASH_SECRET");
+    expect(message).not.toContain("too-short-canary");
   });
 });
 

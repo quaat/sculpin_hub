@@ -416,9 +416,9 @@ leaked / a public alias must never silently resolve to a replacement agent" inva
 2. **Least-privilege discovery credential.** New `parseDiscoveryConfig` (`@sculpin/config`) reads
    `SCULPIN_UPSTREAM_URL` (reused `httpUrl` validator; deployment-only, no SSRF) and a NEW
    `SCULPIN_DISCOVERY_API_KEY` — a SEPARATE key from the data-plane `SCULPIN_UPSTREAM_API_KEY`. S7
-   finishes the broader web/data-plane secret split; this establishes the discovery seam so the web
-   control plane need not hold the proxy's request-serving key. Fails closed with field-name-only
-   errors; documented in `.env.example` (names/docs only).
+   ([[D-021]]) completed the broader web/data-plane secret split; this established the discovery seam so
+   the web control plane need not hold the proxy's request-serving key. Fails closed with
+   field-name-only errors; documented in `.env.example` (names/docs only).
 
 3. **Centralized credential boundary (CLAUDE.md rules 3-5).** `apps/web/app/lib/discovery.ts` is the
    ONLY place that reads the discovery URL/key and calls Sculpin. Mirroring `apps/proxy/src/upstream.ts`
@@ -446,6 +446,29 @@ config (`parseDiscoveryConfig`), web `discovery.test.ts`, and web `catalogue.tes
 create-from-discovered/drift suites pass; existing catalogue tests stay green. No new DB integration
 suite (all additions are pure/service-layer with injected doubles). An independent security review of
 this slice is required before sign-off. **By:** S5 implementation pass.
+
+## D-021 — S7 web/data-plane secret split (least-privilege PAT config)
+
+**Context.** The web control plane mints/verifies/revokes PATs and so needs the PAT HMAC keyring, but
+it was obtaining that keyring via `parseDataPlaneConfig`, which ALSO requires `SCULPIN_UPSTREAM_URL`
+and `SCULPIN_UPSTREAM_API_KEY`. That forced the web app to hold the proxy's request-serving upstream
+Sculpin credential — a least-privilege / blast-radius violation ([[D-017]], CLAUDE.md rules 3-5): a
+compromised control plane could read the upstream key.
+
+**Decision.** Add a dedicated `parsePatConfig` (`@sculpin/config`) that parses ONLY the PAT-hash env
+(`PAT_HASH_SECRET`, `PAT_HASH_KEY_VERSION`, `PAT_HASH_SECRET_RETIRED`) and returns `PatConfig`
+(`{ patHashSecret, patHashKeyring }`). `parseDataPlaneConfig` now composes that same `patHashSchema`
++ keyring builder (`DataPlaneConfig extends PatConfig`), so there is one keyring-construction source of
+truth and no behavioral drift. `apps/web/app/lib/pat.ts` reads `parsePatConfig` — the web control
+plane no longer requires (or reads) the upstream URL/key. The proxy remains the ONLY reader of
+`SCULPIN_UPSTREAM_URL`/`SCULPIN_UPSTREAM_API_KEY`; admin discovery keeps its separate
+`SCULPIN_DISCOVERY_API_KEY` ([[D-020]]). `.env.example` documents which component reads which secret.
+
+**Verification.** config + web + proxy typecheck/lint clean; new `parsePatConfig` config tests
+(keyring build, retired-key merge, version-collision fail-closed, short-secret rejection, no upstream
+URL/key required, secret-safe errors) pass; full web suite (145) and config suite (34) green;
+`parseDataPlaneConfig` behavior unchanged (its existing tests still pass). Independent security review
+required before sign-off. **By:** S7 implementation pass.
 
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 
