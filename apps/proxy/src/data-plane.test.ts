@@ -413,10 +413,11 @@ describe("POST /v1/chat/completions", () => {
     await server.close();
   });
 
-  it("resolves the alias, reserves one unit, and passes the JSON response through", async () => {
+  it("resolves the alias, reserves one unit, and rewrites the model in the JSON response", async () => {
     const upstreamBody = {
       id: "chatcmpl-1",
       object: "chat.completion",
+      model: "agent-uuid-123",
       choices: [
         {
           index: 0,
@@ -449,8 +450,11 @@ describe("POST /v1/chat/completions", () => {
       payload: body,
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual(upstreamBody);
-    // Alias rewritten to the upstream agent id; client fields preserved.
+    // The client-visible model is the public alias, never the internal agent id.
+    expect(response.json()).toEqual({ ...upstreamBody, model: "support" });
+    expect(response.body).not.toContain("agent-uuid-123");
+    // Alias rewritten to the upstream agent id on the way out; client fields
+    // preserved.
     expect(chatCompletions).toHaveBeenCalledOnce();
     const [payload] = chatCompletions.mock.calls[0]!;
     expect(payload).toEqual({
@@ -465,10 +469,31 @@ describe("POST /v1/chat/completions", () => {
     await server.close();
   });
 
-  it("passes an SSE stream through byte-for-byte", async () => {
+  it("returns a JSON body without a model field unchanged", async () => {
+    const upstreamBody = { id: "chatcmpl-1", object: "chat.completion" };
+    const chatCompletions = vi.fn<ChatCompletions>().mockResolvedValue(
+      new Response(JSON.stringify(upstreamBody), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const server = serverWith(services({ upstream: { chatCompletions } }));
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: auth,
+      payload: body,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(upstreamBody);
+    await server.close();
+  });
+
+  it("rewrites the internal model id to the public alias in the SSE stream (framing preserved)", async () => {
     const frames = [
-      'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
-      'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+      'data: {"id":"c","object":"chat.completion.chunk","model":"agent-uuid-123","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n',
+      ": keep-alive\n\n",
+      'data: {"id":"c","object":"chat.completion.chunk","model":"agent-uuid-123","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n',
       "data: [DONE]\n\n",
     ];
     const chatCompletions = vi
@@ -483,7 +508,12 @@ describe("POST /v1/chat/completions", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toBe("text/event-stream");
-    expect(response.body).toBe(frames.join(""));
+    // The public alias replaces the internal agent id, framing/keepalive/DONE
+    // are preserved, and the internal id never leaks to the client.
+    expect(response.body).toContain('"model":"support"');
+    expect(response.body).not.toContain("agent-uuid-123");
+    expect(response.body).toContain(": keep-alive\n\n");
+    expect(response.body.endsWith("data: [DONE]\n\n")).toBe(true);
     await server.close();
   });
 

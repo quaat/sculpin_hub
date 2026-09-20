@@ -61,9 +61,9 @@ const COMPLETION_BODY = {
 };
 
 const SSE_FRAMES = [
-  'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n',
-  'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n',
-  'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+  `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"${UPSTREAM_AGENT_ID}","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n`,
+  `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"${UPSTREAM_AGENT_ID}","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n`,
+  `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"${UPSTREAM_AGENT_ID}","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n`,
   "data: [DONE]\n\n",
 ].join("");
 
@@ -218,6 +218,9 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       messages: [{ role: "user", content: "hi" }],
     });
     expect(completion.choices[0]?.message.content).toBe("hello from sculpin");
+    // The client-visible model is the public alias, never the internal agent id.
+    expect(completion.model).toBe(PUBLIC_ALIAS);
+    expect(completion.model).not.toBe(UPSTREAM_AGENT_ID);
     // The upstream saw the rewritten agent id and the Hub credential only.
     const upstream = captured[before];
     expect(upstream?.body.model).toBe(UPSTREAM_AGENT_ID);
@@ -237,9 +240,16 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       stream: true,
     });
     let content = "";
-    for await (const chunk of stream)
+    const raw: string[] = [];
+    for await (const chunk of stream) {
       content += chunk.choices[0]?.delta.content ?? "";
+      // Every chunk that carries a model shows the public alias, not the id.
+      if (chunk.model) expect(chunk.model).toBe(PUBLIC_ALIAS);
+      raw.push(JSON.stringify(chunk));
+    }
     expect(content).toBe("hi");
+    // The internal upstream agent id never reaches the client stream.
+    expect(raw.join("")).not.toContain(UPSTREAM_AGENT_ID);
   });
 
   it("returns 404 for an unknown model without calling upstream", async () => {

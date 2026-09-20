@@ -26,6 +26,10 @@ import {
   type QuotaReservation,
 } from "@sculpin/domain";
 import type { RouteRegistry } from "./registry.js";
+import {
+  createSseModelRewriteStream,
+  rewriteModelInJsonBody,
+} from "./rewrite.js";
 
 type Pool = Database["pool"];
 import {
@@ -224,11 +228,23 @@ function handleChatCompletions(services: DataPlaneServices) {
     ))
       reply.header(name, value);
     if (!upstreamResponse.body) return reply.send();
-    // Byte-for-byte passthrough (JSON or SSE): pipe the upstream body straight
-    // through without re-serialization or buffering.
-    return reply.send(
-      Readable.fromWeb(upstreamResponse.body as WebReadableStream<Uint8Array>),
-    );
+    // S9 alias rewrite: Sculpin echoes the internal upstream agent id in the
+    // response body's protocol `model` field, which must NEVER leak to clients.
+    // Rewrite it back to the caller-facing public alias (`parsed.data.model`).
+    const contentType = upstreamResponse.headers.get("content-type") ?? "";
+    if (contentType.includes("text/event-stream")) {
+      // SSE: incremental transform preserving framing/ordering/backpressure and
+      // rewriting ONLY the `model` field inside JSON `data:` events. Never buffer
+      // the whole stream — events are forwarded as they arrive.
+      const rewritten = (
+        upstreamResponse.body as WebReadableStream<Uint8Array>
+      ).pipeThrough(createSseModelRewriteStream(parsed.data.model));
+      return reply.send(Readable.fromWeb(rewritten));
+    }
+    // Non-streaming JSON: the body is small/bounded, so buffering to rewrite the
+    // `model` field is fine (the never-buffer rule applies only to SSE).
+    const text = await upstreamResponse.text();
+    return reply.send(rewriteModelInJsonBody(text, parsed.data.model));
   };
 }
 
