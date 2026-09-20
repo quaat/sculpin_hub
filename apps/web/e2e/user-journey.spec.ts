@@ -66,6 +66,16 @@ test.describe("user journey", () => {
     expect(connectHtml).toContain("/chat/completions");
     expect(connectHtml).not.toContain(SEEDED_CATALOGUE.upstreamAgentId);
     expect(connectHtml).not.toContain(rawToken);
+    // The internal Sculpin URL and upstream credential are proxy-only env and
+    // must never surface in a client-rendered page. Assert their absence when
+    // they happen to be present in the process env.
+    for (const secret of [
+      process.env.SCULPIN_UPSTREAM_URL,
+      process.env.SCULPIN_UPSTREAM_API_KEY,
+      process.env.SCULPIN_DISCOVERY_API_KEY,
+    ]) {
+      if (secret) expect(connectHtml).not.toContain(secret);
+    }
 
     // 7) Revoke the token; the status flips immediately.
     await page.goto("/account/tokens");
