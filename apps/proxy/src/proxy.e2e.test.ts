@@ -74,12 +74,37 @@ const COMPLETION_BODY = {
   exodus: { conversation_id: "internal-conversation-e2e" },
 };
 
-const SSE_FRAMES = [
-  `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"${UPSTREAM_AGENT_ID}","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n`,
-  `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"${UPSTREAM_AGENT_ID}","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n`,
+const chunkFrame = (delta: string): string =>
+  `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"${UPSTREAM_AGENT_ID}","choices":[{"index":0,"delta":${delta},"finish_reason":null}]}\n\n`;
+
+// The upstream stream is split into a HEAD (role + first content + a keepalive
+// comment) and a TAIL (second content + stop + terminal DONE). The fake upstream
+// flushes the HEAD, then blocks on `streamTailGate` before the TAIL. This lets
+// the incremental test hold the tail closed until the stock SDK has already
+// yielded the first content chunk — a whole-stream buffer would deadlock here.
+const SSE_HEAD = [
+  chunkFrame(`{"role":"assistant"}`),
+  ": keep-alive\n\n",
+  chunkFrame(`{"content":"hi"}`),
+].join("");
+const SSE_TAIL = [
+  chunkFrame(`{"content":" there"}`),
   `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"${UPSTREAM_AGENT_ID}","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n`,
   "data: [DONE]\n\n",
 ].join("");
+
+// A deterministic streaming barrier. Default: already open, so ordinary stream
+// tests stream head+tail without pausing. The incremental test installs a fresh
+// pending gate via `armStreamTailGate()` and opens it only AFTER the SDK yields
+// the first content chunk, proving the proxy forwards incrementally.
+let streamTailGate: Promise<void> = Promise.resolve();
+function armStreamTailGate(): () => void {
+  let open!: () => void;
+  streamTailGate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return open;
+}
 
 // Client-supplied headers the caller must NEVER be able to smuggle upstream
 // (conversation isolation, S11/D-022): a raw upstream conversation id and the
@@ -148,7 +173,12 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
             "content-type": "text/event-stream",
             ...upstreamResponseHeaders,
           });
-          response.end(SSE_FRAMES);
+          // Flush the head, then hold the tail behind the barrier. Over loopback
+          // a chunked write is delivered immediately, so the proxy can forward
+          // the first chunk to the SDK while this handler is still parked.
+          response.write(SSE_HEAD);
+          await streamTailGate;
+          response.end(SSE_TAIL);
         } else {
           response.writeHead(200, {
             "content-type": "application/json",
@@ -438,10 +468,48 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       if (chunk.model) expect(chunk.model).toBe(PUBLIC_ALIAS);
       raw.push(JSON.stringify(chunk));
     }
-    expect(content).toBe("hi");
+    expect(content).toBe("hi there");
     // The internal upstream agent id never reaches the client stream.
     expect(raw.join("")).not.toContain(UPSTREAM_AGENT_ID);
   });
+
+  it("streams INCREMENTALLY: the SDK yields the first chunk before the upstream emits the final frame (no whole-stream buffering)", async () => {
+    // Arm the barrier so the fake upstream flushes only the HEAD (role + first
+    // content + keepalive), then parks before the TAIL. We open the gate ONLY
+    // after the stock SDK has already yielded the first content chunk. If the
+    // proxy buffered the whole stream it could not deliver that first chunk
+    // (the upstream is parked), so this loop would hang and the test time out —
+    // completion therefore proves genuine incremental forwarding.
+    const openTail = armStreamTailGate();
+    const stream = await client(goodToken).chat.completions.create({
+      model: PUBLIC_ALIAS,
+      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    });
+
+    let content = "";
+    let firstContentSeen = false;
+    const modelsSeen: string[] = [];
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta.content ?? "";
+      if (delta && !firstContentSeen) {
+        firstContentSeen = true;
+        // Holding the tail closed, we already received chunk one — release it.
+        openTail();
+      }
+      content += delta;
+      if (chunk.model) modelsSeen.push(chunk.model);
+    }
+
+    expect(firstContentSeen).toBe(true);
+    // Head ("hi") + tail (" there") both arrive across the barrier, in order.
+    expect(content).toBe("hi there");
+    // Per-chunk rewrite: every chunk model is the public alias, never the id.
+    expect(modelsSeen.length).toBeGreaterThan(0);
+    for (const model of modelsSeen) expect(model).toBe(PUBLIC_ALIAS);
+    // Explicit bound: if a regression made the proxy buffer the whole stream,
+    // this loop would deadlock on the parked upstream — fail fast, don't hang.
+  }, 15_000);
 
   it("denies a provisioned tenant with NO subscription (403) and never calls upstream (D-019)", async () => {
     // The core D-019 proof: provisioning did NOT auto-grant a trial, so this
