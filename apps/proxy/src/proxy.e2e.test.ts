@@ -237,8 +237,9 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         displayName: "Support",
       },
       primary.userId,
+      "e2e-cat-support-create",
     );
-    await catalogue.publish(entry.id, primary.userId);
+    await catalogue.publish(entry.id, primary.userId, "e2e-cat-support-publish");
     supportEntryId = entry.id;
     // A second catalogue entry that EXISTS (so a PAT may scope to it) but is
     // never granted by any plan — used to prove PAT-scope exclusion yields 404.
@@ -249,6 +250,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         displayName: "Premium",
       },
       primary.userId,
+      "e2e-cat-premium-create",
     );
 
     // D-019 explicit claim: an admin-created plan whose authoritative offering
@@ -263,12 +265,22 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         oneTimePerOrganization: false,
       },
       primary.userId,
+      "e2e-plan-support-create",
     );
-    await plans.attachCatalogueEntry(supportPlan.id, supportEntryId);
+    await plans.attachCatalogueEntry(
+      supportPlan.id,
+      supportEntryId,
+      primary.userId,
+      "e2e-plan-support-attach",
+    );
     const primarySub = await subscriptions.grantFromPlan(
       primary.organizationId,
       supportPlan.id,
-      primary.userId,
+      {
+        actorUserId: primary.userId,
+        requestId: "e2e-grant-primary-support",
+        viaAdmin: false,
+      },
     );
     // The subscription froze the plan's offering set (support) at grant time.
     expect(primarySub.offerings).toContain(supportEntryId);
@@ -278,6 +290,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       userId: primary.userId,
       organizationId: primary.organizationId,
       name: "e2e-primary",
+      requestId: "e2e-mint-primary",
     });
     goodToken = primaryPat.token;
     primaryPatId = primaryPat.record.id;
@@ -289,6 +302,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         organizationId: primary.organizationId,
         name: "e2e-scoped-premium",
         scopeCatalogueEntryIds: [premiumEntry.id],
+        requestId: "e2e-mint-scoped-premium",
       })
     ).token;
     // A PAT minted then immediately revoked: revocation must take effect at once.
@@ -296,9 +310,10 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       userId: primary.userId,
       organizationId: primary.organizationId,
       name: "e2e-revoked",
+      requestId: "e2e-mint-revoked",
     });
     revokedToken = toRevoke.token;
-    await pat.revoke(toRevoke.record.id, primary.userId);
+    await pat.revoke(toRevoke.record.id, primary.userId, "e2e-revoke-revoked");
 
     // Tenant B: provisioned but NEVER claims a plan. Per D-019 it has NO
     // subscription, so every data-plane request is DENIED (403) and the
@@ -315,6 +330,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         userId: unsubscribed.userId,
         organizationId: unsubscribed.organizationId,
         name: "e2e-nosub",
+        requestId: "e2e-mint-nosub",
       })
     ).token;
 
@@ -331,7 +347,11 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
     const drainedSub = await subscriptions.grantFromPlan(
       drained.organizationId,
       supportPlan.id,
-      primary.userId,
+      {
+        actorUserId: drained.userId,
+        requestId: "e2e-grant-drained-support",
+        viaAdmin: false,
+      },
     );
     await database.pool.query(
       "UPDATE subscriptions SET quota_used = quota_limit WHERE id=$1",
@@ -342,6 +362,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         userId: drained.userId,
         organizationId: drained.organizationId,
         name: "e2e-drained",
+        requestId: "e2e-mint-drained",
       })
     ).token;
 
@@ -354,8 +375,13 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         displayName: "Analytics",
       },
       primary.userId,
+      "e2e-cat-analytics-create",
     );
-    await catalogue.publish(analyticsEntry.id, primary.userId);
+    await catalogue.publish(
+      analyticsEntry.id,
+      primary.userId,
+      "e2e-cat-analytics-publish",
+    );
     const reportsEntry = await catalogue.create(
       {
         publicAlias: REPORTS_ALIAS,
@@ -363,6 +389,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         displayName: "Reports",
       },
       primary.userId,
+      "e2e-cat-reports-create",
     );
     // reportsEntry is deliberately NOT published — it must never resolve at the
     // data plane even when a subscription snapshot grants it.
@@ -377,8 +404,14 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         oneTimePerOrganization: false,
       },
       primary.userId,
+      "e2e-plan-analytics-create",
     );
-    await plans.attachCatalogueEntry(analyticsPlan.id, analyticsEntry.id);
+    await plans.attachCatalogueEntry(
+      analyticsPlan.id,
+      analyticsEntry.id,
+      primary.userId,
+      "e2e-plan-analytics-attach",
+    );
     const abPlan = await plans.create(
       {
         key: "e2e-ab-plan",
@@ -388,9 +421,20 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         oneTimePerOrganization: false,
       },
       primary.userId,
+      "e2e-plan-ab-create",
     );
-    await plans.attachCatalogueEntry(abPlan.id, supportEntryId);
-    await plans.attachCatalogueEntry(abPlan.id, analyticsEntry.id);
+    await plans.attachCatalogueEntry(
+      abPlan.id,
+      supportEntryId,
+      primary.userId,
+      "e2e-plan-ab-attach-support",
+    );
+    await plans.attachCatalogueEntry(
+      abPlan.id,
+      analyticsEntry.id,
+      primary.userId,
+      "e2e-plan-ab-attach-analytics",
+    );
     const reportsPlan = await plans.create(
       {
         key: "e2e-reports-plan",
@@ -400,8 +444,14 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         oneTimePerOrganization: false,
       },
       primary.userId,
+      "e2e-plan-reports-create",
     );
-    await plans.attachCatalogueEntry(reportsPlan.id, reportsEntry.id);
+    await plans.attachCatalogueEntry(
+      reportsPlan.id,
+      reportsEntry.id,
+      primary.userId,
+      "e2e-plan-reports-attach",
+    );
 
     // Provision a fresh tenant, grant it a plan, and mint a PAT in one step.
     async function provisionWithPlan(
@@ -421,16 +471,17 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         organizationSlug: slug,
         requestId: slug,
       });
-      const sub = await subscriptions.grantFromPlan(
-        t.organizationId,
-        planId,
-        t.userId,
-      );
+      const sub = await subscriptions.grantFromPlan(t.organizationId, planId, {
+        actorUserId: t.userId,
+        requestId: `e2e-grant-${slug}`,
+        viaAdmin: false,
+      });
       const minted = await pat.mint({
         userId: t.userId,
         organizationId: t.organizationId,
         name: slug,
         ...(scopeCatalogueEntryIds ? { scopeCatalogueEntryIds } : {}),
+        requestId: `e2e-mint-${slug}`,
       });
       return {
         userId: t.userId,
@@ -448,6 +499,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         organizationId: primary.organizationId,
         name: "e2e-expired",
         expiresAt: new Date(Date.now() - 60_000),
+        requestId: "e2e-mint-expired",
       })
     ).token;
 
@@ -491,7 +543,10 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       supportPlan.id,
     );
     suspendedSubToken = suspended.token;
-    await subscriptions.setStatus(suspended.subscriptionId, "suspended");
+    await subscriptions.setStatus(suspended.subscriptionId, "suspended", {
+      actorUserId: primary.userId,
+      requestId: "e2e-suspend-sub",
+    });
 
     // Out-of-window (expired) subscription: isSubscriptionActive false -> 403.
     const expiredSub = await provisionWithPlan("e2e-expired-sub", supportPlan.id);
@@ -529,12 +584,20 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
     const oqSupportSub = await subscriptions.grantFromPlan(
       offeringQuota.organizationId,
       supportPlan.id,
-      offeringQuota.userId,
+      {
+        actorUserId: offeringQuota.userId,
+        requestId: "e2e-grant-oq-support",
+        viaAdmin: false,
+      },
     );
     await subscriptions.grantFromPlan(
       offeringQuota.organizationId,
       analyticsPlan.id,
-      offeringQuota.userId,
+      {
+        actorUserId: offeringQuota.userId,
+        requestId: "e2e-grant-oq-analytics",
+        viaAdmin: false,
+      },
     );
     await database.pool.query(
       "UPDATE subscriptions SET quota_used = quota_limit WHERE id=$1",
@@ -545,6 +608,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         userId: offeringQuota.userId,
         organizationId: offeringQuota.organizationId,
         name: "e2e-offering-quota",
+        requestId: "e2e-mint-offering-quota",
       })
     ).token;
 
