@@ -286,6 +286,131 @@ export interface CatalogueRepository {
 }
 
 // ---------------------------------------------------------------------------
+// S5 — Server-side Sculpin discovery (parsing only; NO I/O here)
+//
+// The Hub discovers the upstream Sculpin agents by calling Sculpin's OpenAI
+// `GET /v1/models` (docs/SCULPIN_INTEGRATION.md §1, §4). Per that contract each
+// agent is emitted TWICE — once keyed by its human-friendly, RENAME-ABLE `slug`
+// and once by its STABLE `id` UUID — and `owned_by` is the literal `"exodus"`.
+//
+// PAIRING SAFETY (the riskiest correctness call). The ModelList `data` rows are
+// FLAT `{ id, object, owned_by, created? }` records; the contract carries NO
+// field that links a slug row to its UUID row for the same agent. We therefore
+// CANNOT reconstruct the slug↔uuid pairing from the response alone, and we
+// deliberately DO NOT guess one: a wrong guess could silently map a public alias
+// onto a REPLACEMENT upstream agent, which the mission forbids. Instead we surface
+// EACH id as its own {@link DiscoveredAgent}, classify it as uuid-form or
+// slug-form, and let the catalogue-admin layer prefer UUID-form entries as
+// stable catalogue targets (STABLE-ALIAS RULE). `agentId` is the STABLE id to
+// store as `upstreamAgentId`: the UUID itself for uuid-form rows; for slug-form
+// rows there is no stable id available, so `agentId` falls back to the slug and
+// `isUuid` is false so callers can fail closed / require a UUID target.
+// ---------------------------------------------------------------------------
+
+/**
+ * A single agent id discovered from Sculpin's `GET /v1/models`. Because the
+ * upstream response gives no explicit slug↔uuid link, this represents ONE id
+ * row, not a reconstructed agent pair.
+ *
+ *  - `id`:      the raw id string exactly as Sculpin emitted it.
+ *  - `agentId`: the value to persist as `upstreamAgentId`. Equal to `id`. For a
+ *              uuid-form row this is the STABLE agent UUID (preferred target);
+ *              for a slug-form row it is the rename-able slug (unstable — callers
+ *              should prefer a uuid-form row when both exist for the same agent).
+ *  - `isUuid`:  true when `id` is a well-formed UUID (the stable form).
+ *  - `ownedBy`: the upstream `owned_by` value (expected `"exodus"`).
+ */
+export interface DiscoveredAgent {
+  readonly id: string;
+  readonly agentId: string;
+  readonly isUuid: boolean;
+  readonly ownedBy: string;
+}
+
+// Strict RFC-4122-shaped UUID (any version/variant hex layout). Case-insensitive
+// because Sculpin may emit either case; classification only, never trusted for
+// authz.
+const discoveredUuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+interface RawModelRow {
+  readonly id: unknown;
+  readonly object?: unknown;
+  readonly owned_by?: unknown;
+}
+
+/**
+ * Parse Sculpin's OpenAI `GET /v1/models` body into discovered agent id rows.
+ *
+ * Fail-closed: throws {@link DomainValidationError} on any payload that is not a
+ * well-formed non-empty `{ object: "list", data: [{ id, ... }] }` ModelList, or
+ * any row whose `id` is not a non-empty string. Duplicate ids collapse to the
+ * first occurrence. The result preserves upstream order.
+ *
+ * The returned rows are NOT paired (see the module note): each id is surfaced on
+ * its own, classified via `isUuid`. Callers that need a stable catalogue target
+ * should prefer `isUuid === true` rows.
+ */
+export function parseDiscoveredAgents(
+  modelListJson: unknown,
+): readonly DiscoveredAgent[] {
+  if (!modelListJson || typeof modelListJson !== "object")
+    throw new DomainValidationError(
+      "Sculpin models response must be a JSON object.",
+    );
+  const body = modelListJson as { object?: unknown; data?: unknown };
+  if (body.object !== "list")
+    throw new DomainValidationError(
+      "Sculpin models response must have object === 'list'.",
+    );
+  if (!Array.isArray(body.data))
+    throw new DomainValidationError(
+      "Sculpin models response `data` must be an array.",
+    );
+  if (body.data.length === 0)
+    throw new DomainValidationError(
+      "Sculpin models response `data` must not be empty.",
+    );
+  const seen = new Set<string>();
+  const agents: DiscoveredAgent[] = [];
+  for (const rawRow of body.data as unknown[]) {
+    if (!rawRow || typeof rawRow !== "object")
+      throw new DomainValidationError(
+        "Sculpin models response contains a non-object entry.",
+      );
+    const row = rawRow as RawModelRow;
+    if (typeof row.id !== "string" || row.id.length === 0)
+      throw new DomainValidationError(
+        "Sculpin models response entry `id` must be a non-empty string.",
+      );
+    const id = row.id;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const ownedBy = typeof row.owned_by === "string" ? row.owned_by : "";
+    agents.push({
+      id,
+      agentId: id,
+      isUuid: discoveredUuidPattern.test(id),
+      ownedBy,
+    });
+  }
+  return agents;
+}
+
+/**
+ * The set of STABLE upstream agent ids discoverable right now — the UUID-form
+ * rows only. This is the authoritative set the catalogue-admin layer validates a
+ * chosen `upstreamAgentId` against (create-from-discovered) and diffs published
+ * entries against (drift). Returned as a `Set` for O(1) membership; the callers
+ * never expose it to non-admins.
+ */
+export function stableDiscoveredAgentIds(
+  agents: readonly DiscoveredAgent[],
+): ReadonlySet<string> {
+  return new Set(agents.filter((agent) => agent.isUuid).map((agent) => agent.agentId));
+}
+
+// ---------------------------------------------------------------------------
 // M4 — Plans, subscriptions & entitlements (NO payment provider; D-004/D-019)
 //
 // A `Plan` is an admin-configurable product (free trial, commercial monthly,

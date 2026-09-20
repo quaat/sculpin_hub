@@ -397,6 +397,56 @@ provider ([[D-004]]).
 reworked `subscription.integration.test.ts` (8). An independent security review of this slice is
 required before sign-off. **By:** S3 implementation pass.
 
+## D-020 — S5 catalogue admin + server-side Sculpin discovery (fail-closed, no unsafe pairing)
+
+**Decision (2026-09-20):** Add a SERVER-SIDE discovery slice that enumerates upstream Sculpin agents
+via Sculpin's OpenAI `GET /v1/models`, plus catalogue-admin operations that create entries from
+discovered agents and detect drift — all admin-gated and upholding [[D-014]]'s "upstream never
+leaked / a public alias must never silently resolve to a replacement agent" invariant.
+
+1. **No unsafe slug↔uuid pairing (the riskiest call).** Per `docs/SCULPIN_INTEGRATION.md` §1/§4 each
+   agent is emitted TWICE (slug row + UUID row) as FLAT `{id}` strings with NO field linking the two
+   rows. We therefore CANNOT reconstruct the pairing from the response, and deliberately DO NOT guess
+   one (a wrong guess would silently map an alias onto a replacement agent). `parseDiscoveredAgents`
+   (pure, in `@sculpin/domain`) surfaces EACH id as its own `DiscoveredAgent`, classified `isUuid`,
+   and fails closed (`DomainValidationError`) on any non-`{object:"list", data:[{id}]}` payload.
+   `stableDiscoveredAgentIds` returns ONLY the uuid-form ids — the STABLE-ALIAS rule: the catalogue
+   `upstreamAgentId` must be the stable UUID.
+
+2. **Least-privilege discovery credential.** New `parseDiscoveryConfig` (`@sculpin/config`) reads
+   `SCULPIN_UPSTREAM_URL` (reused `httpUrl` validator; deployment-only, no SSRF) and a NEW
+   `SCULPIN_DISCOVERY_API_KEY` — a SEPARATE key from the data-plane `SCULPIN_UPSTREAM_API_KEY`. S7
+   finishes the broader web/data-plane secret split; this establishes the discovery seam so the web
+   control plane need not hold the proxy's request-serving key. Fails closed with field-name-only
+   errors; documented in `.env.example` (names/docs only).
+
+3. **Centralized credential boundary (CLAUDE.md rules 3-5).** `apps/web/app/lib/discovery.ts` is the
+   ONLY place that reads the discovery URL/key and calls Sculpin. Mirroring `apps/proxy/src/upstream.ts`
+   it injects `Authorization: Bearer <SCULPIN_DISCOVERY_API_KEY>`, forwards NO caller credential,
+   accepts an injected `fetch` (tests never call live), bounds the call with a timeout, and NEVER
+   returns/logs the URL, key, or upstream body — failures surface as a sanitized `DiscoveryError`.
+   Server-only (transitively imports `next/headers` via `requireAdmin`). Every call is admin-gated
+   (canonical `users.role`, [[D-013]]).
+
+4. **Fail-closed catalogue admin.** `createCatalogueEntryFromDiscovered` validates the chosen
+   `upstreamAgentId` is a currently-discoverable STABLE id BEFORE creating, else
+   `UndiscoverableAgentError` (never mints an alias onto a non-existent/replacement agent).
+   `detectCatalogueDrift` REPORTS published entries whose agent vanished upstream (candidates to
+   disable) but does NOT auto-disable (S6 UI acts). `upstreamAgentId` stays admin-only; the public
+   `toPublicModel`/`listPublished` projection is unchanged. `resolvePublishedAlias` still returns ONLY
+   the stored id of a PUBLISHED entry — a disappeared agent yields an upstream 404 the proxy (S8/S9)
+   surfaces as fail-closed.
+
+**Scope (deferred):** admin discovery/catalogue PAGES + HTTP handlers (S6); the broader config secret
+split (S7); proxy-time alias resolution + 404 handling (S8/S9). No live Sculpin call in tests (fake
+injected `fetch` per the testing rule).
+
+**Verification:** domain + config + web typecheck/lint clean; new domain (`parseDiscoveredAgents`),
+config (`parseDiscoveryConfig`), web `discovery.test.ts`, and web `catalogue.test.ts`
+create-from-discovered/drift suites pass; existing catalogue tests stay green. No new DB integration
+suite (all additions are pure/service-layer with injected doubles). An independent security review of
+this slice is required before sign-off. **By:** S5 implementation pass.
+
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 
 **Decision:** Set `account.accountLinking.enabled = false` in `apps/web/app/lib/auth.ts`. An

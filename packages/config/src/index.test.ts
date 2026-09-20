@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseDataPlaneConfig,
+  parseDiscoveryConfig,
   parseProxyConfig,
   parseWebAuthConfig,
   parseWebConfig,
@@ -241,5 +242,45 @@ describe("data-plane configuration", () => {
     expect(message).toContain("HUB_PUBLIC_URL");
     expect(message).not.toContain(validDataPlane.SCULPIN_UPSTREAM_API_KEY);
     expect(message).not.toContain(validDataPlane.PAT_HASH_SECRET);
+  });
+});
+
+describe("discovery configuration", () => {
+  const validDiscovery = {
+    SCULPIN_UPSTREAM_URL: "http://sculpin.internal:8001",
+    SCULPIN_DISCOVERY_API_KEY: "sk-discovery-canary-secret",
+  };
+  it("parses a complete discovery environment", () => {
+    const config = parseDiscoveryConfig(validDiscovery);
+    expect(config.sculpinUpstreamUrl).toBe("http://sculpin.internal:8001");
+    expect(config.sculpinDiscoveryApiKey).toBe("sk-discovery-canary-secret");
+  });
+  it("fails closed when the discovery key is missing", () => {
+    const rest = { ...validDiscovery };
+    delete (rest as Record<string, string>).SCULPIN_DISCOVERY_API_KEY;
+    expect(() => parseDiscoveryConfig(rest)).toThrow(
+      "SCULPIN_DISCOVERY_API_KEY",
+    );
+  });
+  it("rejects a non-http Sculpin upstream URL", () => {
+    expect(() =>
+      parseDiscoveryConfig({
+        ...validDiscovery,
+        SCULPIN_UPSTREAM_URL: "ftp://sculpin.internal",
+      }),
+    ).toThrow("SCULPIN_UPSTREAM_URL");
+  });
+  it("does not echo the discovery key in errors", () => {
+    let message = "";
+    try {
+      parseDiscoveryConfig({
+        ...validDiscovery,
+        SCULPIN_UPSTREAM_URL: "not a url",
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("SCULPIN_UPSTREAM_URL");
+    expect(message).not.toContain(validDiscovery.SCULPIN_DISCOVERY_API_KEY);
   });
 });

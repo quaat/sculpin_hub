@@ -7,8 +7,10 @@ import {
   formatPatToken,
   isSubscriptionActive,
   narrowOfferingsToPatScopes,
+  parseDiscoveredAgents,
   parsePatToken,
   resolveEntitlement,
+  stableDiscoveredAgentIds,
   toPublicModel,
   validateCatalogueEntryInput,
   validateCreatePersonalTenantCommand,
@@ -465,5 +467,102 @@ describe("narrowOfferingsToPatScopes", () => {
   });
   it("yields nothing when no scope is entitled", () => {
     expect(narrowOfferingsToPatScopes([C], [A, B])).toEqual([]);
+  });
+});
+
+describe("parseDiscoveredAgents", () => {
+  const UUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const UUID2 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+  function modelList(data: unknown[]): unknown {
+    return { object: "list", data };
+  }
+
+  it("parses a well-formed list emitting slug + uuid rows for each agent", () => {
+    const agents = parseDiscoveredAgents(
+      modelList([
+        { id: "support", object: "model", created: 1720000000, owned_by: "exodus" },
+        { id: UUID, object: "model", created: 1720000000, owned_by: "exodus" },
+      ]),
+    );
+    expect(agents).toEqual([
+      { id: "support", agentId: "support", isUuid: false, ownedBy: "exodus" },
+      { id: UUID, agentId: UUID, isUuid: true, ownedBy: "exodus" },
+    ]);
+  });
+
+  it("classifies uuid-form vs slug-form ids", () => {
+    const agents = parseDiscoveredAgents(
+      modelList([
+        { id: UUID, object: "model", owned_by: "exodus" },
+        { id: "help-desk", object: "model", owned_by: "exodus" },
+        { id: "not-a-uuid-1234", object: "model", owned_by: "exodus" },
+      ]),
+    );
+    expect(agents.map((a) => a.isUuid)).toEqual([true, false, false]);
+    expect(stableDiscoveredAgentIds(agents)).toEqual(new Set([UUID]));
+  });
+
+  it("keeps the STABLE-ALIAS rule: only uuid-form rows are stable targets", () => {
+    const agents = parseDiscoveredAgents(
+      modelList([
+        { id: "support", owned_by: "exodus" },
+        { id: UUID, owned_by: "exodus" },
+        { id: "billing", owned_by: "exodus" },
+        { id: UUID2, owned_by: "exodus" },
+      ]),
+    );
+    expect(stableDiscoveredAgentIds(agents)).toEqual(new Set([UUID, UUID2]));
+  });
+
+  it("surfaces a single-appearance agent (uuid-only or slug-only)", () => {
+    const uuidOnly = parseDiscoveredAgents(
+      modelList([{ id: UUID, owned_by: "exodus" }]),
+    );
+    expect(uuidOnly).toHaveLength(1);
+    expect(uuidOnly[0]?.isUuid).toBe(true);
+    const slugOnly = parseDiscoveredAgents(
+      modelList([{ id: "lonely-slug", owned_by: "exodus" }]),
+    );
+    expect(slugOnly[0]?.isUuid).toBe(false);
+    // A slug-only agent is NOT a stable target: fail-closed for catalogue use.
+    expect(stableDiscoveredAgentIds(slugOnly).size).toBe(0);
+  });
+
+  it("de-duplicates repeated ids preserving first occurrence", () => {
+    const agents = parseDiscoveredAgents(
+      modelList([
+        { id: "support", owned_by: "exodus" },
+        { id: "support", owned_by: "exodus" },
+      ]),
+    );
+    expect(agents).toHaveLength(1);
+  });
+
+  it("tolerates a missing / non-string owned_by (empty string)", () => {
+    const agents = parseDiscoveredAgents(modelList([{ id: "support" }]));
+    expect(agents[0]?.ownedBy).toBe("");
+  });
+
+  it.each([
+    ["null", null],
+    ["a string", "list"],
+    ["missing object", { data: [] }],
+    ["wrong object", { object: "models", data: [{ id: "x" }] }],
+    ["non-array data", { object: "list", data: {} }],
+    ["empty data", { object: "list", data: [] }],
+  ])("fails closed on %s", (_name, payload) => {
+    expect(() => parseDiscoveredAgents(payload)).toThrow(DomainValidationError);
+  });
+
+  it.each([
+    ["non-object entry", [42]],
+    ["missing id", [{ object: "model", owned_by: "exodus" }]],
+    ["empty id", [{ id: "", owned_by: "exodus" }]],
+    ["non-string id", [{ id: 123, owned_by: "exodus" }]],
+  ])("fails closed on a malformed entry: %s", (_name, data) => {
+    expect(() =>
+      parseDiscoveredAgents({ object: "list", data }),
+    ).toThrow(DomainValidationError);
   });
 });

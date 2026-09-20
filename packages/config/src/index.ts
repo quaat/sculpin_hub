@@ -74,6 +74,27 @@ export interface DataPlaneConfig {
   /** Full keyring for constructing the PAT service (rotation-aware). */
   patHashKeyring: PatHashKeyring;
 }
+
+/**
+ * S5 admin-only Sculpin DISCOVERY configuration (least-privilege slice).
+ *
+ * Server-side catalogue discovery calls Sculpin's OpenAI `GET /v1/models` to
+ * enumerate upstream agents. It needs an upstream target + a Sculpin credential,
+ * but that credential is DELIBERATELY SEPARATE from the data-plane's
+ * `SCULPIN_UPSTREAM_API_KEY` (a distinct, least-privilege `SCULPIN_DISCOVERY_API_KEY`).
+ * S7 completes the broader web/data-plane secret split; this slice establishes
+ * the discovery seam so the web control plane never has to hold the proxy's
+ * request-serving key.
+ *
+ * Like the data-plane config, `sculpinUpstreamUrl` is DEPLOYMENT configuration
+ * only — never sourced from a request, catalogue record, admin form, or PAT
+ * (SSRF / credential boundary). Neither the URL nor the key is ever returned to
+ * clients, logged, or persisted.
+ */
+export interface DiscoveryConfig {
+  sculpinUpstreamUrl: string;
+  sculpinDiscoveryApiKey: string;
+}
 export interface WorkerConfig extends CommonConfig {
   shutdownTimeoutMs: number;
 }
@@ -328,6 +349,30 @@ export function parseDataPlaneConfig(input: NodeJS.ProcessEnv): DataPlaneConfig 
     patHashKeyring: { currentVersion, keys },
   };
 }
+const discoverySchema = z.object({
+  // Deployment-only upstream target — same source of truth as the data plane's
+  // `SCULPIN_UPSTREAM_URL`. Never sourced from a request/catalogue/PAT (no SSRF).
+  SCULPIN_UPSTREAM_URL: httpUrl,
+  // Least-privilege Sculpin credential used ONLY for admin-side discovery. Kept
+  // separate from `SCULPIN_UPSTREAM_API_KEY` (S7 finishes the broader split).
+  // Never stored in the DB, returned to clients, logged, or in usage events.
+  SCULPIN_DISCOVERY_API_KEY: z.string().min(1).max(4096),
+});
+
+/**
+ * Parse and validate the admin-only Sculpin discovery configuration. Fails
+ * closed with a field-name-only, secret-safe error. Isolated from the web PAT /
+ * auth config so the web control plane does not require a Sculpin key unless it
+ * actually performs discovery.
+ */
+export function parseDiscoveryConfig(input: NodeJS.ProcessEnv): DiscoveryConfig {
+  const value = parse(discoverySchema, input);
+  return {
+    sculpinUpstreamUrl: value.SCULPIN_UPSTREAM_URL,
+    sculpinDiscoveryApiKey: value.SCULPIN_DISCOVERY_API_KEY,
+  };
+}
+
 export function parseWorkerConfig(input: NodeJS.ProcessEnv): WorkerConfig {
   const value = parse(
     baseSchema.extend({
