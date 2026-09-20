@@ -15,9 +15,11 @@ export { PostgresPlanRepository } from "./plan.js";
 export { PostgresSubscriptionRepository } from "./subscription.js";
 export {
   PostgresPatService,
+  PatScopeUnknownError,
   hashPatSecret,
   verifyPatSecretHash,
   type MintPatCommand,
+  type PatKeyring,
 } from "./pat.js";
 
 export type PrismaClientLike = PrismaClient;

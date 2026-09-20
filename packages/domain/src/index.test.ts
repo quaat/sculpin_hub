@@ -6,14 +6,17 @@ import {
   DomainValidationError,
   formatPatToken,
   isSubscriptionActive,
+  narrowOfferingsToPatScopes,
   parsePatToken,
   resolveEntitlement,
   toPublicModel,
   validateCatalogueEntryInput,
   validateCreatePersonalTenantCommand,
   validatePatName,
+  validatePatScopeIds,
   validatePlanInput,
   validateQuotaAmount,
+  PAT_MAX_SCOPES,
   PAT_PREFIX,
   PAT_PUBLIC_ID_LENGTH,
   PAT_SECRET_LENGTH,
@@ -409,4 +412,58 @@ describe("validatePatName", () => {
   ])("rejects %s", (_label, name) =>
     expect(() => validatePatName(name)).toThrow(DomainValidationError),
   );
+});
+
+const CE = (n: string) =>
+  `${n.repeat(8)}-${n.repeat(4)}-4${n.repeat(3)}-8${n.repeat(3)}-${n.repeat(12)}`;
+
+describe("validatePatScopeIds", () => {
+  const A = CE("a");
+  const B = CE("b");
+  it("accepts an empty list (unscoped) and a bounded list of uuids", () => {
+    expect(() => validatePatScopeIds([])).not.toThrow();
+    expect(() => validatePatScopeIds([A, B])).not.toThrow();
+  });
+  it("rejects a non-uuid id", () => {
+    expect(() => validatePatScopeIds(["not-a-uuid"])).toThrow(
+      DomainValidationError,
+    );
+  });
+  it("rejects duplicates", () => {
+    expect(() => validatePatScopeIds([A, A])).toThrow(DomainValidationError);
+  });
+  it("rejects more than the cap", () => {
+    const many = Array.from(
+      { length: PAT_MAX_SCOPES + 1 },
+      (_, i) =>
+        `${i.toString(16).padStart(8, "0").slice(0, 8)}-0000-4000-8000-000000000000`,
+    );
+    expect(() => validatePatScopeIds(many)).toThrow(DomainValidationError);
+  });
+});
+
+describe("narrowOfferingsToPatScopes", () => {
+  const A = CE("a");
+  const B = CE("b");
+  const C = CE("c");
+  it("passes the entitlement through unchanged when unscoped", () => {
+    const entitled = [B, A];
+    expect(narrowOfferingsToPatScopes([], entitled)).toBe(entitled);
+  });
+  it("returns the sorted intersection when scoped", () => {
+    expect(narrowOfferingsToPatScopes([B, A], [A, B, C])).toEqual(
+      [A, B].sort(),
+    );
+  });
+  it("drops a scope naming a non-entitled entry (a PAT can only narrow)", () => {
+    expect(narrowOfferingsToPatScopes([A, C], [A, B])).toEqual([A]);
+  });
+  it("is order-independent", () => {
+    expect(narrowOfferingsToPatScopes([C, A, B], [B, C, A])).toEqual(
+      [A, B, C].sort(),
+    );
+  });
+  it("yields nothing when no scope is entitled", () => {
+    expect(narrowOfferingsToPatScopes([C], [A, B])).toEqual([]);
+  });
 });

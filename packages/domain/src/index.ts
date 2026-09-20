@@ -660,6 +660,59 @@ export function validatePatName(name: string): void {
     );
 }
 
+/** Max catalogue-entry scopes a single PAT may name (fail-closed upper bound). */
+export const PAT_MAX_SCOPES = 100;
+
+const patScopeUuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Validate the requested PAT scope catalogue-entry ids. Scopes are IMMUTABLE and
+ * set ONLY at mint. Each id must be a well-formed uuid; the list must be free of
+ * duplicates and bounded by {@link PAT_MAX_SCOPES}. This is a pure shape check;
+ * EXISTENCE against `catalogue_entries` is enforced atomically in the mint
+ * transaction (db/pat.ts). An empty list is valid and means "unscoped" (inherit
+ * the principal's full current entitlement).
+ */
+export function validatePatScopeIds(ids: readonly string[]): void {
+  if (!Array.isArray(ids))
+    throw new DomainValidationError("PAT scopes must be an array.");
+  if (ids.length > PAT_MAX_SCOPES)
+    throw new DomainValidationError(
+      `A PAT may name at most ${PAT_MAX_SCOPES} catalogue scopes.`,
+    );
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (typeof id !== "string" || !patScopeUuidPattern.test(id))
+      throw new DomainValidationError(
+        "PAT scope catalogue-entry ids must be uuids.",
+      );
+    if (seen.has(id))
+      throw new DomainValidationError("PAT scopes must not contain duplicates.");
+    seen.add(id);
+  }
+}
+
+/**
+ * Narrow a principal's entitled catalogue-entry ids by a PAT's immutable scopes
+ * ("a PAT can only narrow"). Pure and composable — the seam a later milestone
+ * (S8) further intersects with the published catalogue + available quota.
+ *
+ *  - empty `patScopes` → return `entitledCatalogueEntryIds` unchanged (unscoped =
+ *    full principal entitlement);
+ *  - otherwise → the SORTED intersection. A scope naming an entry the principal
+ *    is not entitled to simply drops out, so a PAT can never grant MORE than the
+ *    principal has (fail-closed).
+ */
+export function narrowOfferingsToPatScopes(
+  patScopes: readonly string[],
+  entitledCatalogueEntryIds: readonly string[],
+): readonly string[] {
+  if (patScopes.length === 0) return entitledCatalogueEntryIds;
+  const entitled = new Set(entitledCatalogueEntryIds);
+  return [...new Set(patScopes.filter((id) => entitled.has(id)))].sort();
+}
+
 /**
  * A stored PAT record. NEVER carries the raw secret or its digest — the digest
  * lives only in the data layer and is never surfaced to callers.
@@ -674,6 +727,12 @@ export interface PatRecord {
   readonly createdAt: Date;
   readonly lastUsedAt?: Date;
   readonly expiresAt?: Date;
+  /**
+   * Immutable catalogue-entry scopes set at mint. EMPTY means "unscoped" —
+   * inherit the principal's full current entitlement. A non-empty list narrows
+   * the PAT to exactly those catalogue entries (a PAT can only narrow).
+   */
+  readonly scopes: readonly string[];
 }
 
 /** Resolved caller identity after a successful PAT authentication. */
@@ -681,6 +740,11 @@ export interface PatIdentity {
   readonly patId: string;
   readonly userId: UserId;
   readonly organizationId: OrganizationId;
+  /**
+   * The PAT's immutable catalogue-entry scopes (empty = unscoped). S8 intersects
+   * these with the active-subscription offerings and published catalogue.
+   */
+  readonly scopes: readonly string[];
 }
 
 /** A freshly minted PAT: the record plus the ONE-TIME raw token to display. */

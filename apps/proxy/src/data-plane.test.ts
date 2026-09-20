@@ -37,7 +37,12 @@ function database(): Database {
 }
 
 const GOOD_TOKEN = `sclp_pat_${"A".repeat(22)}_${"b".repeat(43)}`;
-const IDENTITY = { patId: "pat-1", userId: "user-1", organizationId: "org-1" };
+const IDENTITY = {
+  patId: "pat-1",
+  userId: "user-1",
+  organizationId: "org-1",
+  scopes: [],
+};
 
 function services(overrides: Partial<DataPlaneServices> = {}): DataPlaneServices {
   return {

@@ -53,8 +53,8 @@ async function resolveService(
   defaultServicePromise ??= (async () => {
     const { database } = resolveAuthDependencies();
     await database.ready();
-    const { patHashSecret } = parseDataPlaneConfig(process.env);
-    return new PostgresPatService(database.pool, patHashSecret);
+    const { patHashKeyring } = parseDataPlaneConfig(process.env);
+    return new PostgresPatService(database.pool, patHashKeyring);
   })();
   return defaultServicePromise;
 }
@@ -92,6 +92,12 @@ async function resolveOrgLoader(
 export interface CreatePatInput {
   readonly name: string;
   readonly expiresAt?: Date;
+  /**
+   * Optional IMMUTABLE catalogue-entry scopes to narrow the token to. Empty /
+   * omitted = unscoped (inherit the caller's full entitlement). Existence is
+   * validated atomically in the mint transaction.
+   */
+  readonly scopeCatalogueEntryIds?: readonly string[];
 }
 
 /**
@@ -113,6 +119,9 @@ export async function createPersonalAccessToken(
     organizationId,
     name: input.name,
     ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+    ...(input.scopeCatalogueEntryIds !== undefined
+      ? { scopeCatalogueEntryIds: input.scopeCatalogueEntryIds }
+      : {}),
   });
 }
 

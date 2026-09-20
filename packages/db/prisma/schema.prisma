@@ -236,6 +236,7 @@ model CatalogueEntry {
   updatedBy         User?                        @relation("CatalogueEntryUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   planLinks         PlanCatalogueEntry[]
   subscriptionLinks SubscriptionCatalogueEntry[]
+  patScopes         PersonalAccessTokenScope[]
 
   @@index([status], map: "idx_catalogue_entries_status")
   @@map("catalogue_entries")
@@ -352,25 +353,46 @@ model SubscriptionCatalogueEntry {
 // active user/org/membership and verifies the secret in constant time. Revocation
 // or expiry flips the row out of the active set. The raw secret is NEVER stored.
 model PersonalAccessToken {
-  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  publicId       String       @unique(map: "personal_access_tokens_public_id_key") @map("public_id") @db.VarChar(64)
-  userId         String       @map("user_id") @db.Uuid
-  organizationId String       @map("organization_id") @db.Uuid
-  name           String       @db.VarChar(120)
-  secretHash     String       @map("secret_hash") @db.VarChar(128)
-  status         PatStatus    @default(active)
-  lastUsedAt     DateTime?    @map("last_used_at") @db.Timestamptz(6)
-  expiresAt      DateTime?    @map("expires_at") @db.Timestamptz(6)
-  revokedAt      DateTime?    @map("revoked_at") @db.Timestamptz(6)
-  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
-  version        Int          @default(1)
-  user           User         @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  id             String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  publicId       String                     @unique(map: "personal_access_tokens_public_id_key") @map("public_id") @db.VarChar(64)
+  userId         String                     @map("user_id") @db.Uuid
+  organizationId String                     @map("organization_id") @db.Uuid
+  name           String                     @db.VarChar(120)
+  secretHash     String                     @map("secret_hash") @db.VarChar(128)
+  // Version of PAT_HASH_SECRET the digest was computed under (keyring rotation).
+  hashKeyVersion Int                        @default(1) @map("hash_key_version") @db.SmallInt
+  status         PatStatus                  @default(active)
+  lastUsedAt     DateTime?                  @map("last_used_at") @db.Timestamptz(6)
+  expiresAt      DateTime?                  @map("expires_at") @db.Timestamptz(6)
+  revokedAt      DateTime?                  @map("revoked_at") @db.Timestamptz(6)
+  createdAt      DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                   @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version        Int                        @default(1)
+  user           User                       @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organization   Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  scopes         PersonalAccessTokenScope[]
 
   @@index([userId, status], map: "idx_personal_access_tokens_user_status")
   @@index([organizationId, status], map: "idx_personal_access_tokens_org_status")
   @@map("personal_access_tokens")
+}
+
+// IMMUTABLE catalogue-entry scopes for a PAT (S4). Rows are inserted ONLY at
+// mint and NEVER updated/added later — to change scopes a user mints a new PAT.
+// ZERO rows means "unscoped" (inherit the principal's full current entitlement);
+// rows NARROW the PAT to exactly those catalogue entries. The narrowing is
+// enforced at runtime by intersection with the subscription offerings + the
+// published catalogue (S8), so a scope naming an entry the subscription doesn't
+// offer simply yields no access — a PAT can never grant MORE than the principal.
+model PersonalAccessTokenScope {
+  patId            String              @map("pat_id") @db.Uuid
+  catalogueEntryId String              @map("catalogue_entry_id") @db.Uuid
+  pat              PersonalAccessToken @relation(fields: [patId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  catalogueEntry   CatalogueEntry      @relation(fields: [catalogueEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([patId, catalogueEntryId])
+  @@index([catalogueEntryId], map: "idx_personal_access_token_scopes_entry")
+  @@map("personal_access_token_scopes")
 }
 
 // Better Auth server-side (database) session. The cookie carries only the

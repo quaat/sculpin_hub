@@ -46,6 +46,7 @@ function record(overrides: Partial<PatRecord> = {}): PatRecord {
     name: "laptop",
     status: "active",
     createdAt: new Date("2026-09-20T00:00:00.000Z"),
+    scopes: [],
     ...overrides,
   };
 }
@@ -108,6 +109,28 @@ describe("createPersonalAccessToken", () => {
       organizationId: ORG_ID,
       name: "temp",
       expiresAt,
+    });
+  });
+
+  it("forwards optional catalogue-entry scopes through to mint", async () => {
+    const service = serviceMock();
+    const scopeCatalogueEntryIds = [
+      "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    ];
+    await createPersonalAccessToken(
+      { name: "scoped", scopeCatalogueEntryIds },
+      {
+        authz: authzFor(),
+        service,
+        resolvePersonalOrganizationId: () => Promise.resolve(ORG_ID),
+      },
+    );
+    expect(service.mint).toHaveBeenCalledWith({
+      userId: USER_ID,
+      organizationId: ORG_ID,
+      name: "scoped",
+      scopeCatalogueEntryIds,
     });
   });
 

@@ -53,11 +53,26 @@ export interface ProxyConfig extends CommonConfig {
  * credential the Hub sends upstream to Sculpin; it never reaches the DB,
  * browsers, logs, usage events, or responses.
  */
+/**
+ * A versioned keyring of PAT HMAC secrets so `PAT_HASH_SECRET` can be ROTATED
+ * without invalidating live tokens. Structurally identical to `@sculpin/db`'s
+ * `PatKeyring` (config does not depend on db). `currentVersion` is the version
+ * new tokens are minted under and MUST be present in `keys`; retired versions
+ * stay in `keys` so old tokens keep verifying.
+ */
+export interface PatHashKeyring {
+  readonly currentVersion: number;
+  readonly keys: ReadonlyMap<number, string>;
+}
+
 export interface DataPlaneConfig {
   hubPublicUrl: string;
   sculpinUpstreamUrl: string;
   sculpinUpstreamApiKey: string;
+  /** The CURRENT PAT hash secret (raw), i.e. `keys.get(currentVersion)`. */
   patHashSecret: string;
+  /** Full keyring for constructing the PAT service (rotation-aware). */
+  patHashKeyring: PatHashKeyring;
 }
 export interface WorkerConfig extends CommonConfig {
   shutdownTimeoutMs: number;
@@ -222,6 +237,34 @@ const httpUrl = z
     "must be an http(s) URL",
   );
 
+// Optional retired PAT hash secrets, so tokens minted under an older key still
+// verify during/after a rotation. A JSON object mapping version-number -> secret
+// (each >= 32 chars), e.g. `{"1":"<old-32+char-secret>"}`. Fails closed on
+// malformed JSON, short keys, or non-positive versions; version collisions with
+// the CURRENT version are rejected in `parseDataPlaneConfig`.
+const patRetiredKeys = z
+  .string()
+  .optional()
+  .transform((value, ctx) => {
+    if (value === undefined || value.trim() === "") return {} as Record<string, string>;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      ctx.addIssue({ code: "custom", message: "must be valid JSON" });
+      return z.NEVER;
+    }
+    return parsed;
+  })
+  .pipe(
+    z.record(
+      z
+        .string()
+        .regex(/^[1-9][0-9]*$/, "must be a positive integer version"),
+      z.string().min(32, "must be at least 32 characters").max(512),
+    ),
+  );
+
 const dataPlaneSchema = z.object({
   NODE_ENV: environmentSchema.default("development"),
   // The canonical, public Hub origin used to render connection instructions
@@ -231,8 +274,18 @@ const dataPlaneSchema = z.object({
   SCULPIN_UPSTREAM_URL: httpUrl,
   // Server secret the Hub sends to Sculpin as `Authorization: Bearer ...`.
   SCULPIN_UPSTREAM_API_KEY: z.string().min(1).max(4096),
-  // Keyed HMAC secret for PAT verification, held OUTSIDE the database.
+  // Keyed HMAC secret for PAT verification, held OUTSIDE the database. This is
+  // the CURRENT key.
   PAT_HASH_SECRET: z.string().min(32, "must be at least 32 characters").max(512),
+  // Version number the CURRENT key is stamped under (default 1).
+  PAT_HASH_KEY_VERSION: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(32767)
+    .default(1),
+  // Optional retired keys so pre-rotation tokens still verify.
+  PAT_HASH_SECRET_RETIRED: patRetiredKeys,
 });
 
 /**
@@ -251,11 +304,28 @@ export function parseDataPlaneConfig(input: NodeJS.ProcessEnv): DataPlaneConfig 
       "Invalid runtime configuration. Check: HUB_PUBLIC_URL production safety.",
     );
   }
+  const currentVersion = value.PAT_HASH_KEY_VERSION;
+  // Build the keyring from retired keys, then set the CURRENT key last so it is
+  // authoritative for its version. A retired entry that names the CURRENT
+  // version is a collision — fail closed rather than silently overriding.
+  const keys = new Map<number, string>();
+  for (const [rawVersion, secret] of Object.entries(
+    value.PAT_HASH_SECRET_RETIRED,
+  )) {
+    const version = Number(rawVersion);
+    if (version === currentVersion)
+      throw new Error(
+        "Invalid runtime configuration. Check: PAT_HASH_SECRET_RETIRED version collision.",
+      );
+    keys.set(version, secret);
+  }
+  keys.set(currentVersion, value.PAT_HASH_SECRET);
   return {
     hubPublicUrl: value.HUB_PUBLIC_URL,
     sculpinUpstreamUrl: value.SCULPIN_UPSTREAM_URL,
     sculpinUpstreamApiKey: value.SCULPIN_UPSTREAM_API_KEY,
     patHashSecret: value.PAT_HASH_SECRET,
+    patHashKeyring: { currentVersion, keys },
   };
 }
 export function parseWorkerConfig(input: NodeJS.ProcessEnv): WorkerConfig {

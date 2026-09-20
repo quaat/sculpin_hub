@@ -140,6 +140,60 @@ describe("data-plane configuration", () => {
     expect(config.sculpinUpstreamApiKey).toBe("sk-upstream-canary-secret");
     expect(config.patHashSecret).toBe("unit-test-pat-hash-secret-32chars!!!");
   });
+
+  it("builds a default v1 keyring from PAT_HASH_SECRET", () => {
+    const { patHashKeyring } = parseDataPlaneConfig(validDataPlane);
+    expect(patHashKeyring.currentVersion).toBe(1);
+    expect(patHashKeyring.keys.get(1)).toBe(
+      "unit-test-pat-hash-secret-32chars!!!",
+    );
+    expect(patHashKeyring.keys.size).toBe(1);
+  });
+
+  it("merges retired keys into the keyring while keeping the current key", () => {
+    const retired = "retired-pat-hash-secret-32chars-long!";
+    const { patHashKeyring } = parseDataPlaneConfig({
+      ...validDataPlane,
+      PAT_HASH_KEY_VERSION: "2",
+      PAT_HASH_SECRET_RETIRED: JSON.stringify({ "1": retired }),
+    });
+    expect(patHashKeyring.currentVersion).toBe(2);
+    expect(patHashKeyring.keys.get(2)).toBe(
+      "unit-test-pat-hash-secret-32chars!!!",
+    );
+    expect(patHashKeyring.keys.get(1)).toBe(retired);
+  });
+
+  it("fails closed on malformed retired-keys JSON", () => {
+    expect(() =>
+      parseDataPlaneConfig({
+        ...validDataPlane,
+        PAT_HASH_SECRET_RETIRED: "{not json",
+      }),
+    ).toThrow("PAT_HASH_SECRET_RETIRED");
+  });
+
+  it("fails closed on a short retired key", () => {
+    expect(() =>
+      parseDataPlaneConfig({
+        ...validDataPlane,
+        PAT_HASH_KEY_VERSION: "2",
+        PAT_HASH_SECRET_RETIRED: JSON.stringify({ "1": "too-short" }),
+      }),
+    ).toThrow("PAT_HASH_SECRET_RETIRED");
+  });
+
+  it("fails closed when a retired key collides with the current version", () => {
+    expect(() =>
+      parseDataPlaneConfig({
+        ...validDataPlane,
+        PAT_HASH_KEY_VERSION: "1",
+        PAT_HASH_SECRET_RETIRED: JSON.stringify({
+          "1": "another-pat-hash-secret-32chars-long!",
+        }),
+      }),
+    ).toThrow("PAT_HASH_SECRET_RETIRED version collision");
+  });
   it("fails closed when the upstream key is missing", () => {
     const rest = { ...validDataPlane };
     delete (rest as Record<string, string>).SCULPIN_UPSTREAM_API_KEY;

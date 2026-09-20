@@ -82,7 +82,7 @@ export function createDataPlaneServices(
   config: DataPlaneConfig,
   deps: DataPlaneDeps = {},
 ): DataPlaneServices {
-  const pat = new PostgresPatService(pool, config.patHashSecret);
+  const pat = new PostgresPatService(pool, config.patHashKeyring);
   const catalogue = new PostgresCatalogueRepository(pool);
   const subscriptions = new PostgresSubscriptionRepository(pool);
   const upstream = createSculpinUpstream(config, deps.fetch);

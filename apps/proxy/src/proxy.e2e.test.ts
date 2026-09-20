@@ -31,6 +31,10 @@ const enabled = process.env.RUN_PROXY_E2E === "true";
 const suite = enabled ? describe : describe.skip;
 
 const PAT_HASH_SECRET = "e2e-pat-hash-secret-least-32-chars-long!!";
+const PAT_HASH_KEYRING = {
+  currentVersion: 1,
+  keys: new Map([[1, PAT_HASH_SECRET]]),
+};
 const UPSTREAM_KEY = "sk-upstream-e2e-secret-xyz";
 const PUBLIC_ALIAS = "support";
 const UPSTREAM_AGENT_ID = "agent-internal-uuid-e2e";
@@ -129,7 +133,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       primary.userId,
     );
     await catalogue.publish(entry.id, primary.userId);
-    const pat = new PostgresPatService(database.pool, PAT_HASH_SECRET);
+    const pat = new PostgresPatService(database.pool, PAT_HASH_KEYRING);
     goodToken = (
       await pat.mint({
         userId: primary.userId,
@@ -172,6 +176,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       sculpinUpstreamUrl: `http://127.0.0.1:${sculpinPort}`,
       sculpinUpstreamApiKey: UPSTREAM_KEY,
       patHashSecret: PAT_HASH_SECRET,
+      patHashKeyring: PAT_HASH_KEYRING,
     };
     proxy = createSecureProductionProxyServer(
       proxyConfig,
