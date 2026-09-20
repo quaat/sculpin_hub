@@ -47,6 +47,12 @@ const PAT_HASH_KEYRING = {
 const UPSTREAM_KEY = "sk-upstream-e2e-secret-xyz";
 const PUBLIC_ALIAS = "support";
 const UPSTREAM_AGENT_ID = "agent-internal-uuid-e2e";
+// A SECOND published offering and an UNPUBLISHED one, used by the §9 authz
+// matrix (offering-bound quota, scope narrowing, publish-gating at resolve).
+const ANALYTICS_ALIAS = "analytics";
+const ANALYTICS_AGENT_ID = "agent-internal-analytics-e2e";
+const REPORTS_ALIAS = "reports";
+const REPORTS_AGENT_ID = "agent-internal-reports-e2e";
 // The seeded free-trial plan's FIXED uuid (migration 20260920180000_plan_domain).
 const SEEDED_FREE_TRIAL_PLAN_ID = "00000000-0000-4000-8000-0000000f7a11";
 
@@ -135,6 +141,17 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
   let scopedToken: string;
   let revokedToken: string;
   let noSubToken: string;
+  // §9 authz matrix principals.
+  let expiredPatToken: string;
+  let inactiveUserToken: string;
+  let inactiveOrgToken: string;
+  let inactiveMembershipToken: string;
+  let suspendedSubToken: string;
+  let expiredSubToken: string;
+  let wrongOfferingToken: string;
+  let scopedAbToken: string;
+  let unpublishedOfferingToken: string;
+  let offeringQuotaToken: string;
   let primaryOrgId: string;
   let primaryPatId: string;
   let supportEntryId: string;
@@ -325,6 +342,209 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
         userId: drained.userId,
         organizationId: drained.organizationId,
         name: "e2e-drained",
+      })
+    ).token;
+
+    // ---- §9 authorization matrix fixtures ----
+    // A second PUBLISHED offering (analytics) and an UNPUBLISHED one (reports).
+    const analyticsEntry = await catalogue.create(
+      {
+        publicAlias: ANALYTICS_ALIAS,
+        upstreamAgentId: ANALYTICS_AGENT_ID,
+        displayName: "Analytics",
+      },
+      primary.userId,
+    );
+    await catalogue.publish(analyticsEntry.id, primary.userId);
+    const reportsEntry = await catalogue.create(
+      {
+        publicAlias: REPORTS_ALIAS,
+        upstreamAgentId: REPORTS_AGENT_ID,
+        displayName: "Reports",
+      },
+      primary.userId,
+    );
+    // reportsEntry is deliberately NOT published — it must never resolve at the
+    // data plane even when a subscription snapshot grants it.
+
+    // Plans for the matrix (all repeatable so multiple tenants may claim them).
+    const analyticsPlan = await plans.create(
+      {
+        key: "e2e-analytics-plan",
+        name: "E2E Analytics Plan",
+        kind: "commercial_monthly",
+        requestQuota: 200,
+        oneTimePerOrganization: false,
+      },
+      primary.userId,
+    );
+    await plans.attachCatalogueEntry(analyticsPlan.id, analyticsEntry.id);
+    const abPlan = await plans.create(
+      {
+        key: "e2e-ab-plan",
+        name: "E2E A+B Plan",
+        kind: "commercial_monthly",
+        requestQuota: 200,
+        oneTimePerOrganization: false,
+      },
+      primary.userId,
+    );
+    await plans.attachCatalogueEntry(abPlan.id, supportEntryId);
+    await plans.attachCatalogueEntry(abPlan.id, analyticsEntry.id);
+    const reportsPlan = await plans.create(
+      {
+        key: "e2e-reports-plan",
+        name: "E2E Reports Plan",
+        kind: "commercial_monthly",
+        requestQuota: 200,
+        oneTimePerOrganization: false,
+      },
+      primary.userId,
+    );
+    await plans.attachCatalogueEntry(reportsPlan.id, reportsEntry.id);
+
+    // Provision a fresh tenant, grant it a plan, and mint a PAT in one step.
+    async function provisionWithPlan(
+      slug: string,
+      planId: string,
+      scopeCatalogueEntryIds?: readonly string[],
+    ): Promise<{
+      userId: string;
+      organizationId: string;
+      subscriptionId: string;
+      token: string;
+    }> {
+      const t = await tenant.create({
+        normalizedEmail: `${slug}@example.com`,
+        displayName: slug,
+        locale: "en",
+        organizationSlug: slug,
+        requestId: slug,
+      });
+      const sub = await subscriptions.grantFromPlan(
+        t.organizationId,
+        planId,
+        t.userId,
+      );
+      const minted = await pat.mint({
+        userId: t.userId,
+        organizationId: t.organizationId,
+        name: slug,
+        ...(scopeCatalogueEntryIds ? { scopeCatalogueEntryIds } : {}),
+      });
+      return {
+        userId: t.userId,
+        organizationId: t.organizationId,
+        subscriptionId: sub.id,
+        token: minted.token,
+      };
+    }
+
+    // Expired PAT on the ALREADY-ENTITLED primary tenant: authentication fails on
+    // the expiry predicate (401) before any entitlement/quota work runs.
+    expiredPatToken = (
+      await pat.mint({
+        userId: primary.userId,
+        organizationId: primary.organizationId,
+        name: "e2e-expired",
+        expiresAt: new Date(Date.now() - 60_000),
+      })
+    ).token;
+
+    // Inactive-principal cases each hold a VALID support subscription, so a 401
+    // proves the failure is the principal-status gate — not a missing entitlement.
+    const inactiveUser = await provisionWithPlan(
+      "e2e-inactive-user",
+      supportPlan.id,
+    );
+    inactiveUserToken = inactiveUser.token;
+    // The users table CHECKs that a 'deactivated' status pairs with a non-null
+    // deactivated_at, so both must be set together.
+    await database.pool.query(
+      "UPDATE users SET status='deactivated', deactivated_at=now() WHERE id=$1",
+      [inactiveUser.userId],
+    );
+
+    const inactiveOrg = await provisionWithPlan(
+      "e2e-inactive-org",
+      supportPlan.id,
+    );
+    inactiveOrgToken = inactiveOrg.token;
+    await database.pool.query(
+      "UPDATE organizations SET status='suspended' WHERE id=$1",
+      [inactiveOrg.organizationId],
+    );
+
+    const inactiveMembership = await provisionWithPlan(
+      "e2e-inactive-membership",
+      supportPlan.id,
+    );
+    inactiveMembershipToken = inactiveMembership.token;
+    await database.pool.query(
+      "UPDATE organization_memberships SET status='inactive' WHERE organization_id=$1 AND user_id=$2",
+      [inactiveMembership.organizationId, inactiveMembership.userId],
+    );
+
+    // Suspended subscription: entitlement resolves inactive -> 403 (no upstream).
+    const suspended = await provisionWithPlan(
+      "e2e-suspended-sub",
+      supportPlan.id,
+    );
+    suspendedSubToken = suspended.token;
+    await subscriptions.setStatus(suspended.subscriptionId, "suspended");
+
+    // Out-of-window (expired) subscription: isSubscriptionActive false -> 403.
+    const expiredSub = await provisionWithPlan("e2e-expired-sub", supportPlan.id);
+    expiredSubToken = expiredSub.token;
+    await database.pool.query(
+      "UPDATE subscriptions SET ends_at = now() - interval '1 day' WHERE id=$1",
+      [expiredSub.subscriptionId],
+    );
+
+    // Active subscription that grants ANALYTICS but not SUPPORT: requesting the
+    // published-but-ungranted support alias is 404 (never reveals it exists).
+    wrongOfferingToken = (
+      await provisionWithPlan("e2e-wrong-offering", analyticsPlan.id)
+    ).token;
+
+    // Sub grants A+B; PAT scoped to A only: A dispatches (200), B is 404.
+    scopedAbToken = (
+      await provisionWithPlan("e2e-scoped-ab", abPlan.id, [supportEntryId])
+    ).token;
+
+    // Entitled (via snapshot) to an UNPUBLISHED entry: it must never resolve.
+    unpublishedOfferingToken = (
+      await provisionWithPlan("e2e-unpublished-offering", reportsPlan.id)
+    ).token;
+
+    // Two subscriptions: SUPPORT drained, ANALYTICS with budget. Offering-bound
+    // quota means support -> 429 while analytics -> 200 for the SAME PAT.
+    const offeringQuota = await tenant.create({
+      normalizedEmail: "e2e-offering-quota@example.com",
+      displayName: "E2E Offering Quota",
+      locale: "en",
+      organizationSlug: "e2e-offering-quota-org",
+      requestId: "e2e-offering-quota",
+    });
+    const oqSupportSub = await subscriptions.grantFromPlan(
+      offeringQuota.organizationId,
+      supportPlan.id,
+      offeringQuota.userId,
+    );
+    await subscriptions.grantFromPlan(
+      offeringQuota.organizationId,
+      analyticsPlan.id,
+      offeringQuota.userId,
+    );
+    await database.pool.query(
+      "UPDATE subscriptions SET quota_used = quota_limit WHERE id=$1",
+      [oqSupportSub.id],
+    );
+    offeringQuotaToken = (
+      await pat.mint({
+        userId: offeringQuota.userId,
+        organizationId: offeringQuota.organizationId,
+        name: "e2e-offering-quota",
       })
     ).token;
 
@@ -628,5 +848,125 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       }),
     ).rejects.toMatchObject({ status: 404 });
     expect(await usageRowCount(primaryOrgId)).toBe(afterGrant);
+  });
+
+  // ---- §9 authorization matrix. Every pre-dispatch denial proves the fake
+  // upstream is never contacted (captured counter unchanged). ----
+
+  it("rejects an EXPIRED PAT with 401 and never calls upstream", async () => {
+    await expectDeniedNoUpstream(() => client(expiredPatToken).models.list(), {
+      status: 401,
+    });
+  });
+
+  it("rejects a PAT whose USER was deactivated with 401 (auth gate precedes entitlement)", async () => {
+    await expectDeniedNoUpstream(
+      () =>
+        client(inactiveUserToken).chat.completions.create({
+          model: PUBLIC_ALIAS,
+          messages: [{ role: "user", content: "x" }],
+        }),
+      { status: 401 },
+    );
+  });
+
+  it("rejects a PAT whose ORG was suspended with 401", async () => {
+    await expectDeniedNoUpstream(() => client(inactiveOrgToken).models.list(), {
+      status: 401,
+    });
+  });
+
+  it("rejects a PAT whose MEMBERSHIP is inactive with 401", async () => {
+    await expectDeniedNoUpstream(
+      () => client(inactiveMembershipToken).models.list(),
+      { status: 401 },
+    );
+  });
+
+  it("denies a SUSPENDED subscription with 403 and never calls upstream", async () => {
+    await expectDeniedNoUpstream(
+      () =>
+        client(suspendedSubToken).chat.completions.create({
+          model: PUBLIC_ALIAS,
+          messages: [{ role: "user", content: "x" }],
+        }),
+      { status: 403, code: "no_active_subscription" },
+    );
+  });
+
+  it("denies an EXPIRED (out-of-window) subscription with 403 and never calls upstream", async () => {
+    await expectDeniedNoUpstream(
+      () =>
+        client(expiredSubToken).chat.completions.create({
+          model: PUBLIC_ALIAS,
+          messages: [{ role: "user", content: "x" }],
+        }),
+      { status: 403, code: "no_active_subscription" },
+    );
+  });
+
+  it("returns 404 for a published offering the subscription does NOT grant (no enumeration), no upstream", async () => {
+    // Entitled to analytics only; support is published but ungranted here.
+    await expectDeniedNoUpstream(
+      () =>
+        client(wrongOfferingToken).chat.completions.create({
+          model: PUBLIC_ALIAS,
+          messages: [{ role: "user", content: "x" }],
+        }),
+      { status: 404 },
+    );
+  });
+
+  it("returns 404 for an UNPUBLISHED offering even though the snapshot grants it, no upstream", async () => {
+    await expectDeniedNoUpstream(
+      () =>
+        client(unpublishedOfferingToken).chat.completions.create({
+          model: REPORTS_ALIAS,
+          messages: [{ role: "user", content: "x" }],
+        }),
+      { status: 404 },
+    );
+  });
+
+  it("with a PAT scoped to A while the sub grants A+B: A dispatches, B is 404", async () => {
+    const before = captured.length;
+    const served = await client(scopedAbToken).chat.completions.create({
+      model: PUBLIC_ALIAS,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    // A (support) is in scope AND entitled -> served and rewritten to its alias.
+    expect(served.model).toBe(PUBLIC_ALIAS);
+    expect(captured.length).toBe(before + 1);
+    // B (analytics) is entitled but OUT OF SCOPE -> 404, no further upstream call.
+    await expectDeniedNoUpstream(
+      () =>
+        client(scopedAbToken).chat.completions.create({
+          model: ANALYTICS_ALIAS,
+          messages: [{ role: "user", content: "x" }],
+        }),
+      { status: 404 },
+    );
+  });
+
+  it("enforces OFFERING-BOUND quota: a drained offering is 429 while an unrelated offering with budget is served", async () => {
+    // support is drained for this tenant -> 429, no upstream.
+    await expectDeniedNoUpstream(
+      () =>
+        client(offeringQuotaToken).chat.completions.create({
+          model: PUBLIC_ALIAS,
+          messages: [{ role: "user", content: "x" }],
+        }),
+      { status: 429 },
+    );
+    // analytics still has budget -> served, model rewritten to its public alias,
+    // and the upstream saw the analytics agent id (per-offering rewrite).
+    const before = captured.length;
+    const served = await client(offeringQuotaToken).chat.completions.create({
+      model: ANALYTICS_ALIAS,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(served.model).toBe(ANALYTICS_ALIAS);
+    expect(captured.length).toBe(before + 1);
+    expect(captured[before]?.body.model).toBe(ANALYTICS_AGENT_ID);
   });
 });
