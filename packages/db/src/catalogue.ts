@@ -127,35 +127,47 @@ export class PostgresCatalogueRepository implements CatalogueRepository {
 
   /**
    * Proxy-facing projection of published models for the OpenAI `GET /v1/models`
-   * surface. Selects ONLY the public alias and a creation timestamp — never
+   * surface. Selects the public alias, the INTERNAL catalogue-entry id (used
+   * server-side by the data plane to intersect with the caller's authorized set
+   * — NEVER sent to the client), and a creation timestamp — never
    * `upstream_agent_id` — so the data plane can never leak the upstream mapping.
    * `created` is unix seconds, as OpenAI clients expect.
    */
   async listPublishedModels(): Promise<
-    readonly { id: string; created: number }[]
+    readonly { id: string; catalogueEntryId: string; created: number }[]
   > {
     const result = await this.pool.query<{
+      catalogueEntryId: string;
       publicAlias: string;
       createdAt: Date;
     }>(
-      `SELECT public_alias AS "publicAlias", created_at AS "createdAt"
+      `SELECT id AS "catalogueEntryId", public_alias AS "publicAlias", created_at AS "createdAt"
        FROM catalogue_entries WHERE status='published' ORDER BY public_alias`,
     );
     return result.rows.map((row) => ({
       id: row.publicAlias,
+      catalogueEntryId: row.catalogueEntryId,
       created: Math.floor(row.createdAt.getTime() / 1000),
     }));
   }
 
   async resolvePublishedAlias(
     alias: string,
-  ): Promise<{ upstreamAgentId: string } | undefined> {
-    const result = await this.pool.query<{ upstreamAgentId: string }>(
-      `SELECT upstream_agent_id AS "upstreamAgentId"
+  ): Promise<{ catalogueEntryId: string; upstreamAgentId: string } | undefined> {
+    const result = await this.pool.query<{
+      catalogueEntryId: string;
+      upstreamAgentId: string;
+    }>(
+      `SELECT id AS "catalogueEntryId", upstream_agent_id AS "upstreamAgentId"
        FROM catalogue_entries WHERE public_alias=$1 AND status='published'`,
       [alias],
     );
     const row = result.rows[0];
-    return row ? { upstreamAgentId: row.upstreamAgentId } : undefined;
+    return row
+      ? {
+          catalogueEntryId: row.catalogueEntryId,
+          upstreamAgentId: row.upstreamAgentId,
+        }
+      : undefined;
   }
 }

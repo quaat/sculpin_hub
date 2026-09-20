@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assertSubscriptionTransition,
+  authorizedCatalogueEntryIds,
   canTransitionSubscription,
   CreatePersonalTenantService,
   DomainValidationError,
@@ -467,6 +468,32 @@ describe("narrowOfferingsToPatScopes", () => {
   });
   it("yields nothing when no scope is entitled", () => {
     expect(narrowOfferingsToPatScopes([C], [A, B])).toEqual([]);
+  });
+});
+
+describe("authorizedCatalogueEntryIds", () => {
+  const A = CE("a");
+  const B = CE("b");
+  const C = CE("c");
+  it("an unscoped PAT authorizes all entitled offerings", () => {
+    const set = authorizedCatalogueEntryIds([A, B], []);
+    expect([...set].sort()).toEqual([A, B].sort());
+  });
+  it("a scoped PAT authorizes only the intersection", () => {
+    const set = authorizedCatalogueEntryIds([A, B], [A]);
+    expect([...set]).toEqual([A]);
+    expect(set.has(B)).toBe(false);
+  });
+  it("a scope naming a non-entitled entry never grants more than entitled", () => {
+    const set = authorizedCatalogueEntryIds([A, B], [A, C]);
+    expect([...set]).toEqual([A]);
+    expect(set.has(C)).toBe(false);
+  });
+  it("empty offerings yield an empty set (fail closed)", () => {
+    expect(authorizedCatalogueEntryIds([], [A]).size).toBe(0);
+  });
+  it("an unscoped PAT with empty offerings yields an empty set", () => {
+    expect(authorizedCatalogueEntryIds([], []).size).toBe(0);
   });
 });
 

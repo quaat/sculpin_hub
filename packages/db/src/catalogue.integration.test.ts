@@ -73,6 +73,7 @@ suite("catalogue repository", () => {
     expect(published?.status).toBe("published");
     expect(published?.version).toBe(2);
     expect(await repository.resolvePublishedAlias("sculpin-pro")).toEqual({
+      catalogueEntryId: entry.id,
       upstreamAgentId: "internal-agent-pro",
     });
   });
@@ -88,6 +89,7 @@ suite("catalogue repository", () => {
     );
     await repository.publish(entry.id, adminId);
     expect(await repository.resolvePublishedAlias("sculpin-temp")).toEqual({
+      catalogueEntryId: entry.id,
       upstreamAgentId: "internal-agent-temp",
     });
     const disabled = await repository.unpublish(entry.id, adminId);
@@ -118,9 +120,16 @@ suite("catalogue repository", () => {
     expect(ids).not.toContain("sculpin-fast");
     expect(ids).not.toContain("sculpin-temp");
     for (const model of models) {
-      expect(Object.keys(model).sort()).toEqual(["created", "id"]);
+      expect(Object.keys(model).sort()).toEqual([
+        "catalogueEntryId",
+        "created",
+        "id",
+      ]);
       expect(Number.isInteger(model.created)).toBe(true);
       expect(model.created).toBeGreaterThan(0);
+      expect(model.catalogueEntryId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
     }
     expect(JSON.stringify(models)).not.toMatch(/internal-agent/);
   });

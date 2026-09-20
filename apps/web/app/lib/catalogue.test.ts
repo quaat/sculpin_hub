@@ -347,12 +347,15 @@ describe("resolvePublishedAlias contract (never substitutes another agent)", () 
     const repository = mockRepository();
     repository.resolvePublishedAlias.mockImplementation((alias: string) =>
       Promise.resolve(
-        alias === "sculpin-fast" ? { upstreamAgentId: AGENT_UUID } : undefined,
+        alias === "sculpin-fast"
+          ? { catalogueEntryId: ENTRY_ID, upstreamAgentId: AGENT_UUID }
+          : undefined,
       ),
     );
     const resolver =
       repository as unknown as CatalogueRepository;
     expect(await resolver.resolvePublishedAlias("sculpin-fast")).toEqual({
+      catalogueEntryId: ENTRY_ID,
       upstreamAgentId: AGENT_UUID,
     });
     // An unknown / unpublished alias resolves to nothing — never a fallback agent.

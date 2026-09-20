@@ -282,7 +282,7 @@ export interface CatalogueRepository {
   ): Promise<CatalogueEntry | undefined>;
   listAll(): Promise<readonly CatalogueEntry[]>;
   listPublished(): Promise<readonly PublicModel[]>;
-  resolvePublishedAlias(alias: string): Promise<{ upstreamAgentId: string } | undefined>;
+  resolvePublishedAlias(alias: string): Promise<{ catalogueEntryId: string; upstreamAgentId: string } | undefined>;
 }
 
 // ---------------------------------------------------------------------------
@@ -836,6 +836,23 @@ export function narrowOfferingsToPatScopes(
   if (patScopes.length === 0) return entitledCatalogueEntryIds;
   const entitled = new Set(entitledCatalogueEntryIds);
   return [...new Set(patScopes.filter((id) => entitled.has(id)))].sort();
+}
+
+/**
+ * The catalogue-entry ids a caller may access RIGHT NOW, as an O(1)-membership
+ * set: the caller's active-subscription offerings narrowed by the PAT's immutable
+ * scopes (a PAT can only narrow). The data plane intersects this with the
+ * PUBLISHED catalogue at resolve time. Fail-closed: no active offerings (or a PAT
+ * whose scopes name nothing entitled) yields an EMPTY set — a valid credential
+ * alone authorizes no model.
+ */
+export function authorizedCatalogueEntryIds(
+  entitledCatalogueEntryIds: readonly string[],
+  patScopes: readonly string[],
+): ReadonlySet<string> {
+  return new Set(
+    narrowOfferingsToPatScopes(patScopes, entitledCatalogueEntryIds),
+  );
 }
 
 /**

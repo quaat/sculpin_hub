@@ -19,6 +19,7 @@ import {
   type Database,
 } from "@sculpin/db";
 import {
+  authorizedCatalogueEntryIds,
   resolveEntitlement,
   type Entitlement,
   type PatIdentity,
@@ -46,10 +47,12 @@ export interface DataPlaneServices {
     organizationId: string,
     amount: number,
   ): Promise<QuotaReservation>;
-  listPublishedModels(): Promise<readonly { id: string; created: number }[]>;
+  listPublishedModels(): Promise<
+    readonly { id: string; catalogueEntryId: string; created: number }[]
+  >;
   resolvePublishedAlias(
     alias: string,
-  ): Promise<{ upstreamAgentId: string } | undefined>;
+  ): Promise<{ catalogueEntryId: string; upstreamAgentId: string } | undefined>;
   readonly upstream: SculpinUpstream;
 }
 
@@ -129,13 +132,39 @@ function handleModels(services: DataPlaneServices) {
     );
     if (!entitlement.active)
       return reply.code(403).send(noActiveSubscriptionError());
-    // Listing exposes ONLY published public aliases; the upstream agent id is
-    // never part of this projection (see catalogue.listPublishedModels).
-    return reply.code(200).send(toModelList(await services.listPublishedModels()));
+    // S8 intersection: the caller may only SEE catalogue models in
+    // published ∩ active-subscription offerings ∩ PAT scopes. Compute the
+    // authorized catalogue-entry id set once, then filter the published list.
+    const authorized = authorizedCatalogueEntryIds(
+      entitlement.entitledCatalogueEntryIds,
+      identity.scopes,
+    );
+    const published = await services.listPublishedModels();
+    // Listing exposes ONLY published public aliases the caller is entitled to
+    // (and in-scope for); the upstream agent id is never part of this
+    // projection (see catalogue.listPublishedModels), and the internal
+    // catalogue-entry id is dropped here before it can reach the client.
+    const visible = published
+      .filter((m) => authorized.has(m.catalogueEntryId))
+      .map((m) => ({ id: m.id, created: m.created }));
+    return reply.code(200).send(toModelList(visible));
   };
 }
 
 function handleChatCompletions(services: DataPlaneServices) {
+  // S8 ordered authorization chain. INVARIANT: authentication + authorization +
+  // quota all precede any upstream request; any denial ⇒ zero upstream calls.
+  // Ordered steps:
+  //   1. authenticate (401 on failure).
+  //   2. parse/validate body (400 on failure).
+  //   3. resolve entitlement; deny if no active subscription (403).
+  //   4. compute the authorized catalogue-entry set (offerings ∩ PAT scopes).
+  //   5. resolve the alias against the PUBLISHED catalogue (404 if unknown).
+  //   6. authorize: a published model outside the caller's set is 404 (never
+  //      reserves quota, never reveals the model exists).
+  //   7. atomic quota reservation (429 on exhaustion).
+  //   8. rewrite alias -> upstream agent id.
+  //   9-11. dispatch upstream and pass the response through.
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const identity = await authenticateRequest(services, request, reply);
     if (!identity) return reply;
@@ -146,10 +175,23 @@ function handleChatCompletions(services: DataPlaneServices) {
     );
     if (!entitlement.active)
       return reply.code(403).send(noActiveSubscriptionError());
+    // The caller's authorized catalogue-entry set (published is intersected
+    // below at resolve time). Computed BEFORE any quota reservation.
+    const authorized = authorizedCatalogueEntryIds(
+      entitlement.entitledCatalogueEntryIds,
+      identity.scopes,
+    );
     // Resolve alias -> upstream agent BEFORE reserving quota so an unknown model
     // never burns a caller's budget. Only PUBLISHED aliases resolve.
     const resolved = await services.resolvePublishedAlias(parsed.data.model);
     if (!resolved) return reply.code(404).send(modelNotFoundError());
+    // Authorization: a published model the caller is NOT entitled to (or that
+    // its PAT scope excludes) is treated as NOT FOUND. Returning 404 rather than
+    // 403 avoids enumeration — the proxy never reveals models outside the
+    // caller's authorized set — and it happens BEFORE reserveQuota so an
+    // unauthorized model never burns quota or reaches the upstream.
+    if (!authorized.has(resolved.catalogueEntryId))
+      return reply.code(404).send(modelNotFoundError());
     // Atomic reservation (CLAUDE.md rule 6). Fail closed: no upstream call when
     // the tenant is out of quota. A subsequent upstream failure does not refund
     // the unit (v1 accounting is best-effort; usage counts are not billed).

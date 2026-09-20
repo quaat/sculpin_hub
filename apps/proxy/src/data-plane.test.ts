@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { openAiErrorSchema } from "@sculpin/api-contracts";
+import { modelListSchema, openAiErrorSchema } from "@sculpin/api-contracts";
 import type { ProxyConfig } from "@sculpin/config";
 import type { Database } from "@sculpin/db";
 import {
@@ -59,7 +59,7 @@ function services(overrides: Partial<DataPlaneServices> = {}): DataPlaneServices
           active: true,
           planKeys: ["free-trial"],
           remainingQuota: 100,
-          entitledCatalogueEntryIds: [],
+          entitledCatalogueEntryIds: ["entry-support"],
         }),
       ),
     reserveQuota: vi
@@ -67,12 +67,16 @@ function services(overrides: Partial<DataPlaneServices> = {}): DataPlaneServices
       .mockResolvedValue({ granted: true, remainingQuota: 99 }),
     listPublishedModels: vi
       .fn<ListPublishedModels>()
-      .mockResolvedValue([{ id: "support", created: 1720000000 }]),
+      .mockResolvedValue([
+        { id: "support", catalogueEntryId: "entry-support", created: 1720000000 },
+      ]),
     resolvePublishedAlias: vi
       .fn<ResolvePublishedAlias>()
       .mockImplementation((alias) =>
         Promise.resolve(
-          alias === "support" ? { upstreamAgentId: "agent-uuid-123" } : undefined,
+          alias === "support"
+            ? { catalogueEntryId: "entry-support", upstreamAgentId: "agent-uuid-123" }
+            : undefined,
         ),
       ),
     upstream: {
@@ -173,7 +177,63 @@ describe("GET /v1/models", () => {
       ],
     });
     expect(response.body).not.toContain("agent-uuid");
+    expect(response.body).not.toContain("entry-support");
+    expect(response.body).not.toContain("catalogueEntryId");
     expect(chatCompletions).not.toHaveBeenCalled();
+    await server.close();
+  });
+
+  it("filters the list to the authorized intersection (drops unentitled models)", async () => {
+    const server = serverWith(
+      services({
+        listPublishedModels: vi.fn<ListPublishedModels>().mockResolvedValue([
+          { id: "support", catalogueEntryId: "entry-support", created: 1720000000 },
+          { id: "premium", catalogueEntryId: "entry-premium", created: 1720000001 },
+        ]),
+        resolveEntitlement: vi.fn<ResolveEntitlement>().mockResolvedValue({
+          organizationId: "org-1",
+          active: true,
+          planKeys: ["free-trial"],
+          remainingQuota: 100,
+          entitledCatalogueEntryIds: ["entry-support"],
+        }),
+      }),
+    );
+    const response = await server.inject({ url: "/v1/models", headers: auth });
+    expect(response.statusCode).toBe(200);
+    const ids = modelListSchema.parse(response.json()).data.map((m) => m.id);
+    expect(ids).toEqual(["support"]);
+    expect(ids).not.toContain("premium");
+    await server.close();
+  });
+
+  it("narrows the list by the PAT's immutable scopes", async () => {
+    const scopedIdentity = { ...IDENTITY, scopes: ["entry-support"] };
+    const server = serverWith(
+      services({
+        authenticate: vi
+          .fn<Authenticate>()
+          .mockImplementation((token) =>
+            Promise.resolve(token === GOOD_TOKEN ? scopedIdentity : undefined),
+          ),
+        listPublishedModels: vi.fn<ListPublishedModels>().mockResolvedValue([
+          { id: "support", catalogueEntryId: "entry-support", created: 1720000000 },
+          { id: "premium", catalogueEntryId: "entry-premium", created: 1720000001 },
+        ]),
+        resolveEntitlement: vi.fn<ResolveEntitlement>().mockResolvedValue({
+          organizationId: "org-1",
+          active: true,
+          planKeys: ["free-trial"],
+          remainingQuota: 100,
+          entitledCatalogueEntryIds: ["entry-support", "entry-premium"],
+        }),
+      }),
+    );
+    const response = await server.inject({ url: "/v1/models", headers: auth });
+    expect(response.statusCode).toBe(200);
+    const ids = modelListSchema.parse(response.json()).data.map((m) => m.id);
+    expect(ids).toEqual(["support"]);
+    expect(ids).not.toContain("premium");
     await server.close();
   });
 });
@@ -190,7 +250,7 @@ describe("POST /v1/chat/completions", () => {
       active: true,
       planKeys: ["free-trial"],
       remainingQuota: 100,
-      entitledCatalogueEntryIds: [],
+      entitledCatalogueEntryIds: ["entry-support"],
     });
     const server = serverWith(services({ resolveEntitlement }));
     const response = await server.inject({
@@ -229,6 +289,100 @@ describe("POST /v1/chat/completions", () => {
       url: "/v1/chat/completions",
       headers: auth,
       payload: { model: "ghost", messages: [{ role: "user", content: "x" }] },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(errorCode(response.json())).toBe("model_not_found");
+    expect(reserveQuota).not.toHaveBeenCalled();
+    expect(chatCompletions).not.toHaveBeenCalled();
+    await server.close();
+  });
+
+  it("returns 404 for a published-but-UNENTITLED model without quota or upstream", async () => {
+    const reserveQuota = vi
+      .fn<ReserveQuota>()
+      .mockResolvedValue({ granted: true, remainingQuota: 99 });
+    const chatCompletions = vi.fn<ChatCompletions>();
+    const server = serverWith(
+      services({
+        reserveQuota,
+        upstream: { chatCompletions },
+        // "premium" resolves (it IS published) but is not in the caller's set.
+        resolvePublishedAlias: vi
+          .fn<ResolvePublishedAlias>()
+          .mockImplementation((alias) =>
+            Promise.resolve(
+              alias === "premium"
+                ? {
+                    catalogueEntryId: "entry-premium",
+                    upstreamAgentId: "agent-premium",
+                  }
+                : undefined,
+            ),
+          ),
+        resolveEntitlement: vi.fn<ResolveEntitlement>().mockResolvedValue({
+          organizationId: "org-1",
+          active: true,
+          planKeys: ["free-trial"],
+          remainingQuota: 100,
+          entitledCatalogueEntryIds: ["entry-support"],
+        }),
+      }),
+    );
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: auth,
+      payload: { model: "premium", messages: [{ role: "user", content: "x" }] },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(errorCode(response.json())).toBe("model_not_found");
+    expect(reserveQuota).not.toHaveBeenCalled();
+    expect(chatCompletions).not.toHaveBeenCalled();
+    await server.close();
+  });
+
+  it("returns 404 for a model excluded by PAT scope without quota or upstream", async () => {
+    const scopedIdentity = { ...IDENTITY, scopes: ["entry-support"] };
+    const reserveQuota = vi
+      .fn<ReserveQuota>()
+      .mockResolvedValue({ granted: true, remainingQuota: 99 });
+    const chatCompletions = vi.fn<ChatCompletions>();
+    const server = serverWith(
+      services({
+        reserveQuota,
+        upstream: { chatCompletions },
+        authenticate: vi
+          .fn<Authenticate>()
+          .mockImplementation((token) =>
+            Promise.resolve(token === GOOD_TOKEN ? scopedIdentity : undefined),
+          ),
+        resolvePublishedAlias: vi
+          .fn<ResolvePublishedAlias>()
+          .mockImplementation((alias) =>
+            Promise.resolve(
+              alias === "premium"
+                ? {
+                    catalogueEntryId: "entry-premium",
+                    upstreamAgentId: "agent-premium",
+                  }
+                : undefined,
+            ),
+          ),
+        // Org is entitled to premium, but the PAT scope excludes it.
+        resolveEntitlement: vi.fn<ResolveEntitlement>().mockResolvedValue({
+          organizationId: "org-1",
+          active: true,
+          planKeys: ["free-trial"],
+          remainingQuota: 100,
+          entitledCatalogueEntryIds: ["entry-support", "entry-premium"],
+        }),
+      }),
+    );
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: auth,
+      payload: { model: "premium", messages: [{ role: "user", content: "x" }] },
     });
     expect(response.statusCode).toBe(404);
     expect(errorCode(response.json())).toBe("model_not_found");
