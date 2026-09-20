@@ -188,18 +188,27 @@ export class PostgresSubscriptionRepository implements SubscriptionRepository {
     usage: UsageContext,
   ): Promise<QuotaReservation> {
     validateQuotaAmount(amount);
-    // Atomic reservation + usage accounting (CLAUDE.md rule 6; S13/M7 D-023).
-    // Both the conditional quota UPDATE and the granted request's usage_events
-    // INSERT run in ONE explicit transaction so quota and usage commit together
-    // or neither. The UPDATE's target row is selected (and row-locked) by a
-    // subquery that only matches an active, in-window subscription with enough
-    // remaining budget. `FOR UPDATE` (no SKIP LOCKED) serializes concurrent
-    // reservations on the same subscription so a last-quota race yields exactly
-    // one winner; the loser re-evaluates `quota_used + $2 <= quota_limit` against
-    // committed data, finds no row, and 0 rows are updated (denied). The lock is
-    // held until COMMIT so the usage row is bound to the winning update. No
-    // read-compare-write anywhere. A usage_events row is written ONLY on grant —
-    // never on a denial.
+    // Atomic, OFFERING-BOUND reservation + usage accounting (CLAUDE.md rule 6;
+    // S13/M7 D-023). Both the conditional quota UPDATE and the granted request's
+    // usage_events INSERT run in ONE explicit transaction so quota and usage
+    // commit together or neither. The UPDATE's target row is selected (and
+    // row-locked) by a subquery that only matches a subscription that: belongs to
+    // the org, is active and in-window, has enough remaining budget, AND whose
+    // FROZEN snapshot (`subscription_catalogue_entries`) actually grants the
+    // requested offering (`usage.catalogueEntryId`, $3). Quota from a subscription
+    // that does NOT grant the requested offering is therefore never usable, even
+    // though the tenant may hold other active subscriptions. When SEVERAL active
+    // subscriptions grant the SAME offering, this pools across them: the subquery
+    // picks the first eligible one with room (soonest-expiring first), so the last
+    // unit of the pool for that offering is spent before a denial. `FOR UPDATE`
+    // (no SKIP LOCKED) serializes concurrent reservations on the SAME row so a
+    // last-quota race yields exactly one winner; the loser re-evaluates
+    // `quota_used + $2 <= quota_limit` against committed data, finds no eligible
+    // row, and 0 rows are updated (denied). The lock is held until COMMIT so the
+    // usage row is bound to the winning update. No read-compare-write anywhere. A
+    // usage_events row is written ONLY on grant — never on a denial — and its
+    // subscription_id therefore always identifies a subscription whose snapshot
+    // contains the recorded catalogue_entry_id.
     const client: PoolClient = await this.pool.connect();
     let resolved = false;
     try {
@@ -208,17 +217,22 @@ export class PostgresSubscriptionRepository implements SubscriptionRepository {
         `UPDATE subscriptions
          SET quota_used = quota_used + $2, version = version + 1, updated_at = now()
          WHERE id = (
-           SELECT id FROM subscriptions
-           WHERE organization_id = $1
-             AND status = 'active'
-             AND (ends_at IS NULL OR ends_at > now())
-             AND quota_used + $2 <= quota_limit
-           ORDER BY ends_at NULLS LAST, id
+           SELECT s.id FROM subscriptions s
+           WHERE s.organization_id = $1
+             AND s.status = 'active'
+             AND (s.ends_at IS NULL OR s.ends_at > now())
+             AND s.quota_used + $2 <= s.quota_limit
+             AND EXISTS (
+               SELECT 1 FROM subscription_catalogue_entries sce
+               WHERE sce.subscription_id = s.id
+                 AND sce.catalogue_entry_id = $3::uuid
+             )
+           ORDER BY s.ends_at NULLS LAST, s.id
            FOR UPDATE
            LIMIT 1
          )
          RETURNING id, quota_limit - quota_used AS remaining`,
-        [organizationId, amount],
+        [organizationId, amount, usage.catalogueEntryId],
       );
       const row = reserved.rows[0];
       if (row) {
@@ -241,17 +255,26 @@ export class PostgresSubscriptionRepository implements SubscriptionRepository {
         resolved = true;
         return { granted: true, remainingQuota: Number(row.remaining) };
       }
-      // Denied: no writes happened; close the transaction and report pooled
-      // remaining. NO usage event is recorded on a denial.
+      // Denied: no writes happened; close the transaction and report the
+      // remaining quota AVAILABLE FOR THE REQUESTED OFFERING — i.e. pooled only
+      // across active, in-window subscriptions whose snapshot grants
+      // `usage.catalogueEntryId`. Quota held by unrelated subscriptions is NOT
+      // counted, so a denial for offering A never reports offering B's budget. NO
+      // usage event is recorded on a denial.
       await client.query("COMMIT");
       resolved = true;
       const pooled = await client.query<{ remaining: string | null }>(
-        `SELECT COALESCE(SUM(quota_limit - quota_used), 0) AS remaining
-         FROM subscriptions
-         WHERE organization_id = $1
-           AND status = 'active'
-           AND (ends_at IS NULL OR ends_at > now())`,
-        [organizationId],
+        `SELECT COALESCE(SUM(s.quota_limit - s.quota_used), 0) AS remaining
+         FROM subscriptions s
+         WHERE s.organization_id = $1
+           AND s.status = 'active'
+           AND (s.ends_at IS NULL OR s.ends_at > now())
+           AND EXISTS (
+             SELECT 1 FROM subscription_catalogue_entries sce
+             WHERE sce.subscription_id = s.id
+               AND sce.catalogue_entry_id = $2::uuid
+           )`,
+        [organizationId, usage.catalogueEntryId],
       );
       return {
         granted: false,

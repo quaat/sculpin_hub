@@ -638,8 +638,11 @@ export function validateQuotaAmount(amount: number): void {
 /**
  * Result of an atomic quota reservation. `granted` is true only when the
  * repository's conditional UPDATE claimed the amount from an active, in-quota
- * subscription; `remainingQuota` is the tenant's pooled remaining budget after
- * the attempt (0 on a denied, exhausted tenant).
+ * subscription WHOSE FROZEN SNAPSHOT GRANTS the requested offering
+ * (`UsageContext.catalogueEntryId`). `remainingQuota` is the budget still
+ * available FOR THAT OFFERING — pooled across the tenant's active subscriptions
+ * that grant it, and 0 when none can serve it. Quota held by subscriptions that
+ * do not grant the requested offering is never counted and never usable.
  */
 export interface QuotaReservation {
   readonly granted: boolean;
@@ -717,12 +720,18 @@ export interface SubscriptionRepository {
     actorUserId: UserId,
   ): Promise<Subscription>;
   /**
-   * Atomically reserve `amount` of request quota from the tenant's active
-   * subscriptions. MUST be a single conditional UPDATE (no read-compare-write)
-   * so concurrent last-quota attempts cannot over-draw. ON GRANT (and never on
-   * denial) it ALSO records a `usage_events` row from `usage` in the SAME
-   * transaction as the quota UPDATE, so quota and usage commit together or
-   * neither (S13/M7, D-023). `usage` carries no secret/prompt/body.
+   * Atomically reserve `amount` of request quota for the offering identified by
+   * `usage.catalogueEntryId`, drawing ONLY from the tenant's active, in-window
+   * subscriptions whose FROZEN snapshot grants that offering (pooling across
+   * several such subscriptions when present). Quota from subscriptions that do
+   * not grant the requested offering is never usable. MUST be a single
+   * conditional UPDATE (no read-compare-write) so concurrent last-quota attempts
+   * cannot over-draw. ON GRANT (and never on denial) it ALSO records a
+   * `usage_events` row from `usage` in the SAME transaction as the quota UPDATE,
+   * so quota and usage commit together or neither, and the event's
+   * subscription_id always identifies a subscription whose snapshot contains the
+   * recorded catalogue_entry_id (S13/M7, D-023). `usage` carries no
+   * secret/prompt/body.
    */
   reserveQuota(
     organizationId: OrganizationId,
