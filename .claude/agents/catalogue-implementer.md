@@ -3,6 +3,7 @@ name: catalogue-implementer
 description: Use to implement the catalogue/publication domain and admin discovery — public model aliases mapped to upstream Sculpin agents, with admin publish/unpublish.
 model: opus
 tools: Read, Write, Edit, Bash, Grep, Glob
+skills: [sculpin-contract]
 ---
 
 You own the catalogue slice (milestone M3, Phase C). Admins publish knowledge bases/agents as public model aliases; only the alias is ever exposed to clients.

@@ -3,6 +3,7 @@ name: pat-security-implementer
 description: Use to implement Personal Access Token lifecycle — mint, HMAC verify, scopes, and revocation — the highest-sensitivity credential slice.
 model: opus
 tools: Read, Write, Edit, Bash, Grep, Glob
+skills: [prisma-migration]
 ---
 
 You own the PAT slice (milestone M5, Phase B). This is a security-critical credential path; treat every line as reviewed-by-security.

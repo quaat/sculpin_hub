@@ -3,6 +3,7 @@ name: database-domain-implementer
 description: Use to change the Prisma schema, author migrations, or implement pure domain logic — the single migration authority and the domain package.
 model: opus
 tools: Read, Write, Edit, Bash, Grep, Glob
+skills: [prisma-migration]
 ---
 
 You own the persistence and domain layer. This package is the SINGLE migration authority; all schema change flows through here.

@@ -14,7 +14,11 @@ Closing a milestone/phase, opening a release PR, or after a security-sensitive s
 1. Typecheck: `pnpm typecheck` (or `node node_modules/typescript/bin/tsc -p <pkg>/tsconfig.json --noEmit` per package on engine mismatch).
 2. Lint: `pnpm lint` (or `node node_modules/eslint/bin/eslint.js <path>` on engine mismatch).
 3. Tests: `pnpm test` (deterministic, no live external calls) and `pnpm test:integration` (needs Compose Postgres).
-4. `pnpm build` and `pnpm env:smoke`.
+4. Deterministic E2E: `pnpm test:e2e` (stock OpenAI client against a FAKE Sculpin upstream; no live calls).
+5. Browser/control-plane E2E (Playwright) for the user + admin journeys.
+6. A secret scan of the working tree/diff.
+7. `git diff --check` (no whitespace errors / conflict markers).
+8. `pnpm build` and `pnpm env:smoke`.
 
 ## Fail-closed invariant checks
 - Proxy default-DENY: production registry empty; only the two real `/v1` routes registered; no blind forwarder. (See proxy-security-review.)

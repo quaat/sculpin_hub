@@ -25,7 +25,7 @@ Building the E2E suite, or verifying Phase A + Phase B together (the minimum via
 - Unregistered `/v1/*` → fail-closed error.
 - Caller PAT/cookies/`Authorization` NOT forwarded upstream (inspect fake upstream's received headers).
 - Internal Sculpin URL + upstream key never in any client-visible surface, log, or usage event.
-- SSE byte-for-byte (`data: <json>\n\n`, `: keep-alive\n\n`, `data: [DONE]`); disconnect propagates.
+- SSE framing preserved (`data: <json>\n\n`, `: keep-alive\n\n`, `data: [DONE]`) with event ordering and backpressure; the incremental transform rewrites ONLY the internal model id to the public alias (not byte-for-byte), and the non-streaming path rewrites the body's `model` field; disconnect propagates.
 - Revoked/expired PAT rejected; trial quota atomic under concurrency at the last unit.
 
 ## Run

@@ -13,7 +13,7 @@ What you review (all under `apps/` and `packages/`):
 Checklist you MUST verify (fail closed — any miss is a blocking finding):
 1. Default-DENY `/v1/*`: production registry (`apps/proxy/src/registry.ts`) starts empty; routes come only from reviewed code, never env/client input; no leftover blind forwarder.
 2. PATs: format `sclp_pat_<id>_<secret>`; secret CSPRNG, shown once, never stored/logged; only HMAC-SHA-256 keyed digest stored; `PAT_HASH_SECRET` outside the DB; constant-time verify. Grep for any place a raw token could be persisted or logged.
-3. Upstream credential: caller's PAT/cookies/`Authorization` NEVER forwarded; single injection module; `OPENAI_COMPAT_DEV_API_KEY`/upstream key never in DB, logs, usage events, errors, or responses; hop-by-hop headers stripped.
+3. Upstream credential: caller's PAT/cookies/`Authorization` NEVER forwarded; single injection module; the Hub's `SCULPIN_UPSTREAM_API_KEY` never in DB, logs, usage events, errors, or responses; hop-by-hop headers stripped.
 4. No internal Sculpin URL exposed; no client/admin-supplied upstream URL (no SSRF).
 5. No secrets/tokens/prompts/response bodies logged or persisted; usage events carry none of these.
 6. Trial quota decrement is atomic (no read-compare-increment); concurrency test exists for last-quota.

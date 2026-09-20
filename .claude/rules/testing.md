@@ -19,7 +19,7 @@ Applies to: all test files (`**/*.test.ts`, `**/*.integration.test.ts`) and test
 
 ## Required negative-security assertions (these must exist and pass)
 - Proxy: unregistered `/v1/*` is DENIED; caller PAT/cookies/`Authorization` are NOT forwarded upstream; the internal Sculpin URL never appears in any client-visible surface; the upstream key never appears in responses/logs/usage events.
-- SSE: byte-for-byte framing (`data: <json>\n\n`, `: keep-alive\n\n`, `data: [DONE]`) via the fake upstream; no buffering; client disconnect propagates.
+- SSE: framing preserved (`data: <json>\n\n`, `: keep-alive\n\n`, `data: [DONE]`) with event ordering and backpressure via the fake upstream; the incremental transform rewrites ONLY the internal model id inside JSON `data:` events to the public alias (not byte-for-byte); no whole-stream buffering; client disconnect propagates. The non-streaming path likewise rewrites the body's `model` field.
 - PAT: DB contents are NOT usable as bearer creds; logs contain no token values; revoked/expired PATs are rejected; verification is constant-time.
 - Quota: atomic trial reservation proven under CONCURRENCY at the last unit (no over-grant).
 - OAuth: linking is provably off; every user has a personal org (invariant query).

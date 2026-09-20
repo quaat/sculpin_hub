@@ -15,10 +15,10 @@ Designing/reviewing the proxy or catalogue, or when a proxy test fails against t
 
 ## Contract essentials
 - **Routes to allow:** `GET /v1/models`, `POST /v1/chat/completions`. DENY `/v1/api-keys` and native `/api/v1/*`. No upstream `/v1/embeddings` or `/v1/completions`.
-- **Auth:** upstream expects `Authorization: Bearer <key>`; env var `OPENAI_COMPAT_DEV_API_KEY`. The Hub injects its own upstream key and never copies Sculpin's outbound `OPENAI_API_KEY`.
-- **Model mapping:** OpenAI `model` = agent slug OR UUID; public alias → agent (single shared upstream credential in v1, D-008); model listing is tenant-scoped.
-- **SSE framing:** `data: <json>\n\n`; keepalive `: keep-alive\n\n`; terminal `data: [DONE]\n\n`. Pass through byte-for-byte; propagate disconnect.
-- **Headers:** pass through `X-Exodus-Conversation-Id`/`-Reused`/`-Source`; strip hop-by-hop; metadata via `X-Agent-Platform-Include-Metadata`.
+- **Auth:** upstream expects `Authorization: Bearer <key>`, validated on Sculpin's inbound side against its own `OPENAI_COMPAT_DEV_API_KEY`. The Hub injects its own upstream credential (`SCULPIN_UPSTREAM_API_KEY`) as that bearer and never copies Sculpin's outbound `OPENAI_API_KEY`.
+- **Model mapping:** OpenAI `model` = agent slug OR UUID; public alias → agent (single shared upstream credential in v1, D-008); model listing is tenant-scoped. The Hub rewrites the internal upstream model id back to the public alias on responses.
+- **SSE framing:** `data: <json>\n\n`; keepalive `: keep-alive\n\n`; terminal `data: [DONE]\n\n`. The Hub runs an incremental transform that preserves this framing, event ordering, and backpressure while rewriting ONLY the model id inside JSON `data:` events to the public alias (so it is NOT byte-for-byte); it does not buffer the whole stream and propagates disconnect.
+- **Headers:** Sculpin emits `X-Exodus-Conversation-Id`/`-Reused`/`-Source` and accepts metadata via `X-Agent-Platform-Include-Metadata`; in v1 the Hub does NOT forward inbound `X-Exodus-Conversation-*` or `X-Agent-Platform-Include-Metadata` upstream and does NOT return upstream conversation headers to clients (conversation isolation). Strip hop-by-hop.
 - **Caveats:** `usage` is a heuristic (do NOT meter on it, D-007); `finish_reason` always `stop`; sampling fields accepted but ignored.
 
 ## Fake upstream
