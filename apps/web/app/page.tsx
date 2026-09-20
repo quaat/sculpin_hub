@@ -19,8 +19,9 @@ export default function HomePage() {
           </Link>
         </div>
         <p className="notice">
-          Presentation preview only. Authentication, subscriptions, API tokens,
-          and Sculpin routing are not configured.
+          Google and GitHub authentication, self-service plans, API tokens, and
+          governed Sculpin routing are live. Visit your account to claim a plan
+          and mint a token.
         </p>
       </section>
       <section aria-labelledby="preview-heading">
@@ -63,8 +64,8 @@ export default function HomePage() {
           <p className="eyebrow">Plan preview</p>
           <h2 id="plans-heading">Start simply. Scale with confidence.</h2>
           <p>
-            Illustrative plan presentation; prices and entitlements are not
-            configured product data.
+            Illustrative tiers. Your actual plans are defined by an administrator
+            and claimable at no cost in v1 — they appear in your account.
           </p>
         </div>
         <div className="plans">
@@ -83,10 +84,10 @@ export default function HomePage() {
           <article className="card featured">
             <span className="tag">Preview</span>
             <h3>Professional</h3>
-            <p className="price">Pricing pending</p>
+            <p className="price">No charge in v1</p>
             <p>
-              For production workloads once billing and entitlements are
-              certified.
+              For production workloads with higher, administrator-configured
+              limits.
             </p>
             <ul>
               <li>Higher configurable limits</li>

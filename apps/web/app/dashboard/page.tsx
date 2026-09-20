@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { getSession } from "../lib/session";
 import { SignInControls, SignOutControl } from "./auth-controls";
 
@@ -37,14 +38,15 @@ export default async function Dashboard() {
         </p>
         <SignOutControl />
       </section>
-      <section className="empty" aria-labelledby="not-ready">
-        <span className="empty-icon" aria-hidden="true">
-          ◇
-        </span>
-        <h2 id="not-ready">Account features are not yet available</h2>
+      <section aria-labelledby="account-cta">
+        <h2 id="account-cta">Manage your account</h2>
         <p>
-          A future focused release will add subscription and usage foundations.
-          No subscription, usage, or token data is currently displayed.
+          Claim a self-service plan, mint and revoke API tokens, and review your
+          subscriptions and metered usage from your{" "}
+          <Link className="text-link" href="/account">
+            account
+          </Link>
+          .
         </p>
       </section>
     </main>

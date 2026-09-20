@@ -1,40 +1,45 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 export const metadata: Metadata = { title: "Pricing" };
 export default function Pricing() {
   return (
     <main id="main">
       <section className="page-hero">
-        <p className="eyebrow">Illustrative plans</p>
-        <h1>Transparent limits before you subscribe</h1>
+        <p className="eyebrow">Plans</p>
+        <h1>Simple, self-service access</h1>
         <p className="lede">
-          The production catalog, billing provider, prices, and entitlements are
-          not configured. These previews communicate the intended experience
-          only.
+          Version 1 has no payment provider. Plans are defined by an
+          administrator and claimed at no cost; each carries a request quota and
+          grants specific catalogue entries. Your available plans and their
+          limits appear in your account.
         </p>
+        <div className="actions">
+          <Link className="button" href="/account">
+            View and claim plans
+          </Link>
+          <Link className="button secondary" href="/documentation">
+            Read the documentation
+          </Link>
+        </div>
       </section>
-      <section className="plans" aria-label="Plan previews">
+      <section className="plans" aria-label="How plans work">
         <article className="card">
-          <h2>Free</h2>
-          <p className="price">
-            £0 <small>/ month</small>
-          </p>
+          <h2>How access works</h2>
           <ul>
-            <li>Evaluation access once enabled</li>
-            <li>Published usage limits</li>
-            <li>Basic documentation</li>
+            <li>An administrator publishes catalogue entries and plans.</li>
+            <li>You claim a self-service plan from your account.</li>
+            <li>Each plan grants a request quota over its catalogue entries.</li>
           </ul>
-          <button disabled>Subscriptions not available</button>
         </article>
-        <article className="card featured">
-          <span className="tag">Preview</span>
-          <h2>Professional</h2>
-          <p className="price">Pricing pending</p>
+        <article className="card">
+          <h2>Governed API</h2>
           <ul>
-            <li>Configurable higher allowances</li>
-            <li>Rate and concurrency policies</li>
-            <li>Operational support options</li>
+            <li>Mint a personal access token to call the OpenAI-compatible API.</li>
+            <li>
+              Requests are authorized, metered against your quota, and audited.
+            </li>
+            <li>Upstream credentials and routing never reach your client.</li>
           </ul>
-          <button disabled>Checkout not configured</button>
         </article>
       </section>
     </main>

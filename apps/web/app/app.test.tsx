@@ -12,12 +12,14 @@ describe("public pages", () => {
   ])("renders the %s page", (_name, page) => {
     expect(renderToStaticMarkup(page)).toContain("<main");
   });
-  it("uses semantic landing-page structure and explicit preview language", () => {
+  it("uses semantic landing-page structure and honest live-status copy", () => {
     const html = renderToStaticMarkup(<HomePage />);
     expect(html).toMatch(/<main[^>]*id="main"/);
     expect(html).toMatch(/<h1>/);
     expect(html).toMatch(/<section/);
-    expect(html).toMatch(/Presentation preview only/);
+    expect(html).toMatch(/governed Sculpin routing are live/);
+    // The landing page does not host the sign-in control (that lives on
+    // /dashboard) and makes no payment/checkout claim (no payments in v1).
     expect(html).not.toMatch(/Sign in|Checkout now/);
   });
   it("disables smooth scrolling for reduced-motion preferences", () => {
