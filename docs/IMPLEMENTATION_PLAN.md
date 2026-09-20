@@ -55,7 +55,9 @@ their acceptance criteria. Live status is in [`STATUS.md`](STATUS.md).
   analytics/audit READ surfaces still to come.
 - **M8:** Secrets via Key Vault + managed identity; no secrets in IaC; private connectivity to
   Sculpin considered.
-- **M9:** Full security review, E2E flows, ops runbook, SLOs, rollback verified.
+- **M9:** Full security review, E2E flows, ops runbook, SLOs, rollback verified. Live manual
+  E2E path (Hub ⇄ real Sculpin ⇄ OpenAI client / Open WebUI) documented in
+  [`LIVE_E2E_RUNBOOK.md`](LIVE_E2E_RUNBOOK.md); Connect page ships copy-paste client snippets.
 
 ## Guardrails
 

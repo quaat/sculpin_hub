@@ -151,6 +151,20 @@ _Last updated: 2026-09-20_
   Verified in-sandbox: config **44** + web **158** unit tests pass (`e2e/**` excluded), config/web
   typecheck + lint clean. Independent security review of the seam still pending (S15c).
 
+- **S16-17 (live E2E runbook + Connect client messaging):** `docs/LIVE_E2E_RUNBOOK.md` documents
+  the full manual live path — Compose Postgres/Redis, annotated `.env` (names only; no secrets),
+  `db:migrate:deploy`, starting web/proxy/worker, live OAuth sign-in + atomic provisioning, admin
+  catalogue discovery/publish, plan claim, one-time PAT mint, driving the Hub from curl / OpenAI
+  SDK / Open WebUI at `${HUB_PUBLIC_URL}/v1`, and revoke — with the boundary invariants to check
+  (no internal URL/agent-id/credential leak; PAT/cookies not forwarded; atomic quota; fail-closed
+  `/v1/*`). The Connect page (`/connect/<alias>`) is refactored into a pure `ConnectView`
+  (`apps/web/app/connect/[alias]/connect-view.tsx`) rendering copy-paste curl/OpenAI-Python/
+  OpenAI-Node/Open-WebUI snippets from the PUBLIC base URL + public alias, showing the PAT only as
+  the `$SCULPIN_HUB_PAT` placeholder and never an internal id/URL/credential. Verified in-sandbox:
+  web **161** unit tests pass (new `ConnectView` render/no-leak tests included), web typecheck +
+  lint clean. The browser journey (`e2e/user-journey.spec.ts`) asserts the Quick-start snippets and
+  the no-leak surface; its execution remains the CI `browser-e2e` job's responsibility.
+
 ## Foundation already in place (from prior branches)
 
 - Monorepo: `apps/{web,proxy,worker}`, `packages/{config,api-contracts,db,domain,jobs,observability}`.

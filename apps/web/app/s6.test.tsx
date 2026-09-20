@@ -4,6 +4,7 @@ import type { PatRecord, PublicModel } from "@sculpin/domain";
 import { ProductsView } from "./products/products-view";
 import { TokensView } from "./account/tokens/tokens-view";
 import { MintToken } from "./account/tokens/mint-token";
+import { ConnectView } from "./connect/[alias]/connect-view";
 import { resolvePublicHubApiUrl } from "./lib/public-hub-url";
 
 /**
@@ -64,6 +65,54 @@ describe("connect base url", () => {
     } finally {
       if (previous !== undefined) process.env.HUB_PUBLIC_URL = previous;
     }
+  });
+});
+
+describe("connect view (S17 client instructions)", () => {
+  const model: PublicModel = {
+    id: "assistant-v1",
+    displayName: "Assistant",
+    description: "Helpful.",
+  };
+  const baseUrl = "https://hub.example.com/v1";
+
+  it("renders base URL, public alias, and curl/OpenAI/Open WebUI snippets", () => {
+    const html = renderToStaticMarkup(
+      <ConnectView model={model} baseUrl={baseUrl} />,
+    );
+    // Base URL + public alias appear in the copy-paste snippets.
+    expect(html).toContain("https://hub.example.com/v1/chat/completions");
+    expect(html).toContain("assistant-v1");
+    // curl + both OpenAI SDKs + Open WebUI guidance are present.
+    expect(html).toContain("curl ");
+    expect(html).toContain("from openai import OpenAI");
+    // The Node snippet's double quotes are HTML-escaped in static markup.
+    expect(html).toContain("import OpenAI from &quot;openai&quot;");
+    expect(html).toContain("Open WebUI");
+    expect(html).toContain("API Base URL");
+  });
+
+  it("shows the PAT only as a placeholder — never a real token", () => {
+    const html = renderToStaticMarkup(
+      <ConnectView model={model} baseUrl={baseUrl} />,
+    );
+    expect(html).toContain("$SCULPIN_HUB_PAT");
+    // The mint-time secret shape must never be baked into instructions.
+    expect(html).not.toMatch(/sclp_pat_[a-z0-9]{6,}_[A-Za-z0-9]/);
+  });
+
+  it("never leaks an internal agent id or the upstream url/credential", () => {
+    const html = renderToStaticMarkup(
+      <ConnectView model={model} baseUrl={baseUrl} />,
+    );
+    // A leaked upstream agent id would look like a uuid; the public projection
+    // carries none.
+    expect(html).not.toMatch(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+    );
+    const lower = html.toLowerCase();
+    expect(lower).not.toContain("upstream");
+    expect(lower).not.toContain("sculpin_upstream");
   });
 });
 

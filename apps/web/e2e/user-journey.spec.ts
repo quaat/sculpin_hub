@@ -54,10 +54,16 @@ test.describe("user journey", () => {
     const publicId = rawToken.split("_").slice(0, 3).join("_"); // sclp_pat_<id>
     await expect(page.locator("code", { hasText: publicId.split("_")[2] }).first()).toBeVisible();
 
-    // 6) Connect page shows the PUBLIC alias and NO internal ids/URL/secrets.
+    // 6) Connect page shows the PUBLIC alias + client instructions and NO
+    //    internal ids/URL/secrets.
     await page.goto(`/connect/${encodeURIComponent(SEEDED_CATALOGUE.publicAlias)}`);
     await expect(page.locator("code", { hasText: SEEDED_CATALOGUE.publicAlias })).toBeVisible();
+    // curl / OpenAI SDK / Open WebUI instructions are present and carry the alias.
+    await expect(page.getByRole("heading", { name: /Quick start/i })).toBeVisible();
+    await expect(page.getByText(/from openai import OpenAI/)).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Open WebUI/i })).toBeVisible();
     const connectHtml = await page.content();
+    expect(connectHtml).toContain("/chat/completions");
     expect(connectHtml).not.toContain(SEEDED_CATALOGUE.upstreamAgentId);
     expect(connectHtml).not.toContain(rawToken);
 
