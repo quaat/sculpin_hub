@@ -13,6 +13,8 @@ import {
   PostgresCatalogueRepository,
   PostgresPatService,
   PostgresPersonalTenantTransaction,
+  PostgresPlanRepository,
+  PostgresSubscriptionRepository,
   type Database,
 } from "@sculpin/db";
 import type { FastifyInstance } from "fastify";
@@ -22,10 +24,17 @@ import { createSecureProductionProxyServer } from "./server.js";
  * Deterministic end-to-end proof (Stage F) that a STOCK OpenAI client works
  * against the Hub's secure `/v1` broker with a real minted PAT, a real
  * PostgreSQL, and a fake (in-process) Sculpin upstream — no live external calls.
- * It exercises the whole M3/M4/M5/M6 slice at once and re-asserts the
- * credential boundary (CLAUDE.md rules 2-5) at the network edge: the caller's
- * PAT and cookies never reach the upstream; only the Hub credential does, and
- * the public alias is rewritten to the internal agent id.
+ *
+ * Rebuilt around D-019 (explicit subscription claim; no auto-trial on
+ * provisioning): every tenant's entitlement is constructed through the REAL
+ * repositories — `PostgresPlanRepository` (create + attach offering) and
+ * `PostgresSubscriptionRepository.grantFromPlan` (materialize + snapshot). A
+ * freshly provisioned tenant has NO subscription and is therefore DENIED (403),
+ * which is the load-bearing D-019 invariant this suite proves at the network
+ * edge. It also re-asserts the credential boundary (CLAUDE.md rules 2-5): the
+ * caller's PAT/cookies never reach the upstream, only the Hub credential does,
+ * the public alias is rewritten to/from the internal agent id, and — critically
+ * for §4 — NO pre-dispatch denial (401/403/404/429) ever reaches the upstream.
  */
 const enabled = process.env.RUN_PROXY_E2E === "true";
 const suite = enabled ? describe : describe.skip;
@@ -38,6 +47,8 @@ const PAT_HASH_KEYRING = {
 const UPSTREAM_KEY = "sk-upstream-e2e-secret-xyz";
 const PUBLIC_ALIAS = "support";
 const UPSTREAM_AGENT_ID = "agent-internal-uuid-e2e";
+// The seeded free-trial plan's FIXED uuid (migration 20260920180000_plan_domain).
+const SEEDED_FREE_TRIAL_PLAN_ID = "00000000-0000-4000-8000-0000000f7a11";
 
 interface CapturedUpstreamRequest {
   readonly headers: IncomingHttpHeaders;
@@ -98,6 +109,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
   let drainedToken: string;
   let scopedToken: string;
   let revokedToken: string;
+  let noSubToken: string;
   let primaryOrgId: string;
   let primaryPatId: string;
   let supportEntryId: string;
@@ -153,9 +165,14 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
 
     database = createDatabase(process.env.DATABASE_URL);
 
-    // Seed the control plane: a provisioned tenant (grants an active trial),
-    // a PUBLISHED catalogue alias -> internal agent, and a real minted PAT.
     const tenant = new PostgresPersonalTenantTransaction(database.pool);
+    const catalogue = new PostgresCatalogueRepository(database.pool);
+    const plans = new PostgresPlanRepository(database.pool);
+    const subscriptions = new PostgresSubscriptionRepository(database.pool);
+    const pat = new PostgresPatService(database.pool, PAT_HASH_KEYRING);
+
+    // Primary tenant A. Provisioning grants NO subscription (D-019) — the
+    // subscription is claimed EXPLICITLY below via a real plan grant.
     const primary = await tenant.create({
       normalizedEmail: "e2e-user@example.com",
       displayName: "E2E User",
@@ -164,7 +181,8 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       requestId: "e2e-user",
     });
     primaryOrgId = primary.organizationId;
-    const catalogue = new PostgresCatalogueRepository(database.pool);
+
+    // A PUBLISHED catalogue alias -> internal agent (the entitled offering).
     const entry = await catalogue.create(
       {
         publicAlias: PUBLIC_ALIAS,
@@ -176,7 +194,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
     await catalogue.publish(entry.id, primary.userId);
     supportEntryId = entry.id;
     // A second catalogue entry that EXISTS (so a PAT may scope to it) but is
-    // never published/entitled — used to prove PAT-scope exclusion yields 404.
+    // never granted by any plan — used to prove PAT-scope exclusion yields 404.
     const premiumEntry = await catalogue.create(
       {
         publicAlias: "premium",
@@ -185,7 +203,30 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       },
       primary.userId,
     );
-    const pat = new PostgresPatService(database.pool, PAT_HASH_KEYRING);
+
+    // D-019 explicit claim: an admin-created plan whose authoritative offering
+    // set is {support}, granted to tenant A. `grantFromPlan` SNAPSHOTS the
+    // plan's current catalogue-entry set onto the subscription in one commit.
+    const supportPlan = await plans.create(
+      {
+        key: "e2e-support-plan",
+        name: "E2E Support Plan",
+        kind: "commercial_monthly",
+        requestQuota: 200,
+        oneTimePerOrganization: false,
+      },
+      primary.userId,
+    );
+    await plans.attachCatalogueEntry(supportPlan.id, supportEntryId);
+    const primarySub = await subscriptions.grantFromPlan(
+      primary.organizationId,
+      supportPlan.id,
+      primary.userId,
+    );
+    // The subscription froze the plan's offering set (support) at grant time.
+    expect(primarySub.offerings).toContain(supportEntryId);
+    expect(primarySub.status).toBe("active");
+
     const primaryPat = await pat.mint({
       userId: primary.userId,
       organizationId: primary.organizationId,
@@ -194,7 +235,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
     goodToken = primaryPat.token;
     primaryPatId = primaryPat.record.id;
     // A PAT scoped to ONLY the premium entry: it may never reach `support`
-    // (authorized = entitled ∩ scopes), so a support request is a 404.
+    // (authorized = entitled ∩ scopes = ∅), so a support request is a 404.
     scopedToken = (
       await pat.mint({
         userId: primary.userId,
@@ -212,22 +253,47 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
     revokedToken = toRevoke.token;
     await pat.revoke(toRevoke.record.id, primary.userId);
 
-    // A second tenant whose quota is fully drained, to prove 429 fail-closed.
-    const secondary = await tenant.create({
+    // Tenant B: provisioned but NEVER claims a plan. Per D-019 it has NO
+    // subscription, so every data-plane request is DENIED (403) and the
+    // upstream is never contacted. This is the core no-auto-trial proof.
+    const unsubscribed = await tenant.create({
+      normalizedEmail: "e2e-nosub@example.com",
+      displayName: "E2E NoSub",
+      locale: "en",
+      organizationSlug: "e2e-nosub-org",
+      requestId: "e2e-nosub",
+    });
+    noSubToken = (
+      await pat.mint({
+        userId: unsubscribed.userId,
+        organizationId: unsubscribed.organizationId,
+        name: "e2e-nosub",
+      })
+    ).token;
+
+    // Tenant C: an active subscription that GRANTS support but whose quota is
+    // fully drained, to prove 429 fail-closed (distinct from the 403 no-sub
+    // case — here entitlement is active, only the budget is exhausted).
+    const drained = await tenant.create({
       normalizedEmail: "e2e-drained@example.com",
       displayName: "E2E Drained",
       locale: "en",
       organizationSlug: "e2e-drained-org",
       requestId: "e2e-drained",
     });
+    const drainedSub = await subscriptions.grantFromPlan(
+      drained.organizationId,
+      supportPlan.id,
+      primary.userId,
+    );
     await database.pool.query(
-      "UPDATE subscriptions SET quota_limit=1, quota_used=1 WHERE organization_id=$1",
-      [secondary.organizationId],
+      "UPDATE subscriptions SET quota_used = quota_limit WHERE id=$1",
+      [drainedSub.id],
     );
     drainedToken = (
       await pat.mint({
-        userId: secondary.userId,
-        organizationId: secondary.organizationId,
+        userId: drained.userId,
+        organizationId: drained.organizationId,
         name: "e2e-drained",
       })
     ).token;
@@ -275,6 +341,50 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       maxRetries: 0,
     });
   }
+
+  /**
+   * Assert that a pre-dispatch denial NEVER reaches the fake upstream: capture
+   * the recorded-request count before, run the request (expecting it to reject
+   * with `status`), and assert the count is unchanged (§4 security matrix).
+   */
+  async function expectDeniedNoUpstream(
+    run: () => Promise<unknown>,
+    matcher: Record<string, unknown>,
+  ): Promise<void> {
+    const before = captured.length;
+    await expect(run()).rejects.toMatchObject(matcher);
+    expect(captured.length).toBe(before);
+  }
+
+  it("seeds the D-019 free-trial plan with a fixed uuid, quota 200, no offerings", async () => {
+    // The seeded default claim target exists exactly as the migration declares
+    // (published + self-service, one-time, quota 200) and — importantly — grants
+    // NO offerings until an admin attaches them. Tenant A is entitled via the
+    // SEPARATE explicit plan above, never via this seed.
+    const { rows } = await database.pool.query<{
+      key: string;
+      published: boolean;
+      self_service_eligible: boolean;
+      one_time_per_organization: boolean;
+      request_quota: number;
+      offerings: number;
+    }>(
+      `SELECT p.key, p.published, p.self_service_eligible,
+              p.one_time_per_organization, p.request_quota,
+              (SELECT count(*)::int FROM plan_catalogue_entries pce
+                WHERE pce.plan_id = p.id) AS offerings
+         FROM plans p WHERE p.id = $1`,
+      [SEEDED_FREE_TRIAL_PLAN_ID],
+    );
+    expect(rows[0]).toMatchObject({
+      key: "free-trial",
+      published: true,
+      self_service_eligible: true,
+      one_time_per_organization: true,
+      request_quota: 200,
+      offerings: 0,
+    });
+  });
 
   it("lists only the published public alias, never the upstream agent id", async () => {
     const list = await client(goodToken).models.list();
@@ -333,49 +443,68 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
     expect(raw.join("")).not.toContain(UPSTREAM_AGENT_ID);
   });
 
+  it("denies a provisioned tenant with NO subscription (403) and never calls upstream (D-019)", async () => {
+    // The core D-019 proof: provisioning did NOT auto-grant a trial, so this
+    // tenant is not entitled. Both the models projection and chat are denied
+    // with 403, and the upstream is never contacted.
+    await expectDeniedNoUpstream(() => client(noSubToken).models.list(), {
+      status: 403,
+      code: "no_active_subscription",
+    });
+    await expectDeniedNoUpstream(
+      () =>
+        client(noSubToken).chat.completions.create({
+          model: PUBLIC_ALIAS,
+          messages: [{ role: "user", content: "x" }],
+        }),
+      { status: 403, code: "no_active_subscription" },
+    );
+  });
+
   it("returns 404 for an unknown model without calling upstream", async () => {
-    const before = captured.length;
-    await expect(
-      client(goodToken).chat.completions.create({
-        model: "ghost",
-        messages: [{ role: "user", content: "x" }],
-      }),
-    ).rejects.toMatchObject({ status: 404 });
-    expect(captured.length).toBe(before);
+    await expectDeniedNoUpstream(
+      () =>
+        client(goodToken).chat.completions.create({
+          model: "ghost",
+          messages: [{ role: "user", content: "x" }],
+        }),
+      { status: 404 },
+    );
   });
 
   it("returns 429 and never calls upstream when the tenant is out of quota", async () => {
-    const before = captured.length;
-    await expect(
-      client(drainedToken).chat.completions.create({
-        model: PUBLIC_ALIAS,
-        messages: [{ role: "user", content: "x" }],
-      }),
-    ).rejects.toMatchObject({ status: 429 });
-    expect(captured.length).toBe(before);
+    await expectDeniedNoUpstream(
+      () =>
+        client(drainedToken).chat.completions.create({
+          model: PUBLIC_ALIAS,
+          messages: [{ role: "user", content: "x" }],
+        }),
+      { status: 429 },
+    );
   });
 
-  it("rejects a bogus PAT with 401", async () => {
-    await expect(
-      client(`sclp_pat_${"Z".repeat(22)}_${"z".repeat(43)}`).models.list(),
-    ).rejects.toMatchObject({ status: 401 });
+  it("rejects a bogus PAT with 401 and never calls upstream", async () => {
+    await expectDeniedNoUpstream(
+      () => client(`sclp_pat_${"Z".repeat(22)}_${"z".repeat(43)}`).models.list(),
+      { status: 401 },
+    );
   });
 
-  it("rejects a revoked PAT with 401 immediately", async () => {
-    await expect(client(revokedToken).models.list()).rejects.toMatchObject({
+  it("rejects a revoked PAT with 401 immediately and never calls upstream", async () => {
+    await expectDeniedNoUpstream(() => client(revokedToken).models.list(), {
       status: 401,
     });
   });
 
   it("returns 404 for a model excluded by the PAT scope, without calling upstream", async () => {
-    const before = captured.length;
-    await expect(
-      client(scopedToken).chat.completions.create({
-        model: PUBLIC_ALIAS,
-        messages: [{ role: "user", content: "x" }],
-      }),
-    ).rejects.toMatchObject({ status: 404 });
-    expect(captured.length).toBe(before);
+    await expectDeniedNoUpstream(
+      () =>
+        client(scopedToken).chat.completions.create({
+          model: PUBLIC_ALIAS,
+          messages: [{ role: "user", content: "x" }],
+        }),
+      { status: 404 },
+    );
   });
 
   it("never returns the upstream conversation headers to the client (S11)", async () => {
