@@ -9,6 +9,7 @@ import {
   modelNotFoundError,
   noActiveSubscriptionError,
   toModelList,
+  upstreamTimeoutError,
   upstreamUnavailableError,
 } from "@sculpin/api-contracts";
 import type { DataPlaneConfig } from "@sculpin/config";
@@ -58,6 +59,7 @@ export interface DataPlaneServices {
     alias: string,
   ): Promise<{ catalogueEntryId: string; upstreamAgentId: string } | undefined>;
   readonly upstream: SculpinUpstream;
+  readonly upstreamTimeoutMs: number;
 }
 
 export interface DataPlaneDeps {
@@ -105,6 +107,7 @@ export function createDataPlaneServices(
     listPublishedModels: () => catalogue.listPublishedModels(),
     resolvePublishedAlias: (alias) => catalogue.resolvePublishedAlias(alias),
     upstream,
+    upstreamTimeoutMs: config.upstreamTimeoutMs,
   };
 }
 
@@ -208,10 +211,18 @@ function handleChatCompletions(services: DataPlaneServices) {
     // Rewrite the public alias to the upstream agent id; all other client fields
     // pass through so sampling controls still reach Sculpin.
     const upstreamPayload = { ...parsed.data, model: resolved.upstreamAgentId };
+    // S10 cancellation + bounded time-to-first-headers. One AbortController does
+    // double duty: client disconnect aborts the upstream run, and a bounded
+    // timer aborts a hung upstream that never returns response headers. The
+    // timer is DISARMED the moment headers arrive, so legitimately long SSE
+    // streams are never cut off afterwards.
     const controller = new AbortController();
-    // Propagate client disconnects so the upstream run is cancelled and the
-    // stream is not buffered.
     request.raw.on("close", () => controller.abort());
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, services.upstreamTimeoutMs);
     let upstreamResponse: Response;
     try {
       upstreamResponse = await services.upstream.chatCompletions(
@@ -219,9 +230,13 @@ function handleChatCompletions(services: DataPlaneServices) {
         { requestHeaders: request.headers, signal: controller.signal },
       );
     } catch {
-      // Never leak the internal URL, the key, or the underlying error.
+      clearTimeout(timer);
+      // Never leak the internal URL, the key, or the underlying error. A timeout
+      // is a distinct 504; any other failure (incl. client disconnect) is 502.
+      if (timedOut) return reply.code(504).send(upstreamTimeoutError());
       return reply.code(502).send(upstreamUnavailableError());
     }
+    clearTimeout(timer); // headers received — disarm so streaming is not aborted
     reply.code(upstreamResponse.status);
     for (const [name, value] of Object.entries(
       forwardableResponseHeaders(upstreamResponse.headers),

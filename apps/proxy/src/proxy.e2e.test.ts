@@ -58,6 +58,9 @@ const COMPLETION_BODY = {
     },
   ],
   usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+  // Non-standard upstream metadata the Hub must strip (S12) before the client
+  // ever sees it.
+  exodus: { conversation_id: "internal-conversation-e2e" },
 };
 
 const SSE_FRAMES = [
@@ -175,6 +178,7 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
       hubPublicUrl: "http://127.0.0.1",
       sculpinUpstreamUrl: `http://127.0.0.1:${sculpinPort}`,
       sculpinUpstreamApiKey: UPSTREAM_KEY,
+      upstreamTimeoutMs: 30_000,
       patHashSecret: PAT_HASH_SECRET,
       patHashKeyring: PAT_HASH_KEYRING,
     };
@@ -221,6 +225,9 @@ suite("proxy end-to-end with the stock OpenAI SDK", () => {
     // The client-visible model is the public alias, never the internal agent id.
     expect(completion.model).toBe(PUBLIC_ALIAS);
     expect(completion.model).not.toBe(UPSTREAM_AGENT_ID);
+    // S12: the non-standard upstream `exodus` metadata is stripped client-side.
+    expect(JSON.stringify(completion)).not.toContain("exodus");
+    expect(JSON.stringify(completion)).not.toContain("internal-conversation-e2e");
     // The upstream saw the rewritten agent id and the Hub credential only.
     const upstream = captured[before];
     expect(upstream?.body.model).toBe(UPSTREAM_AGENT_ID);

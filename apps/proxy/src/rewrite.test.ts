@@ -30,7 +30,34 @@ describe("rewriteModelInJsonBody", () => {
 
   it("leaves a non-string model unchanged", () => {
     const body = JSON.stringify({ id: "x", model: 42 });
-    expect(rewriteModelInJsonBody(body, "support")).toBe(body);
+    // A non-string model is preserved, but the object is still re-serialized.
+    expect(JSON.parse(rewriteModelInJsonBody(body, "support"))).toEqual({
+      id: "x",
+      model: 42,
+    });
+  });
+
+  it("strips a top-level exodus block while rewriting the model", () => {
+    const body = JSON.stringify({
+      id: "x",
+      model: "agent-uuid",
+      exodus: { conversation_id: "internal" },
+    });
+    const out = rewriteModelInJsonBody(body, "support");
+    const parsed = JSON.parse(out) as Record<string, unknown>;
+    expect(parsed).toEqual({ id: "x", model: "support" });
+    expect(out).not.toContain("exodus");
+    expect(out).not.toContain("internal");
+  });
+
+  it("strips a top-level exodus block even without a model field", () => {
+    const body = JSON.stringify({
+      id: "x",
+      exodus: { conversation_id: "internal" },
+    });
+    const out = rewriteModelInJsonBody(body, "support");
+    expect(JSON.parse(out)).toEqual({ id: "x" });
+    expect(out).not.toContain("exodus");
   });
 });
 
@@ -65,6 +92,22 @@ describe("createSseModelRewriteStream", () => {
     // Round-trips as a single valid event.
     const payload = out.slice("data: ".length, out.indexOf("\n\n"));
     expect(JSON.parse(payload)).toMatchObject({ id: "c", model: "support" });
+  });
+
+  it("strips an exodus block from a JSON data event, keeping DONE/keepalive verbatim", async () => {
+    const chunks = [
+      `data: {"id":"c","model":"agent-uuid","exodus":{"conversation_id":"internal"}}\n\n`,
+      ": keep-alive\n\n",
+      "data: [DONE]\n\n",
+    ];
+    const out = await runSse("support", chunks);
+    expect(out).not.toContain("exodus");
+    expect(out).not.toContain("internal");
+    expect(out).toContain(`"model":"support"`);
+    expect(out).not.toContain("agent-uuid");
+    // Non-JSON frames are still forwarded byte-for-byte.
+    expect(out).toContain(": keep-alive\n\n");
+    expect(out).toContain("data: [DONE]\n\n");
   });
 
   it("passes a keepalive comment frame through unchanged", async () => {

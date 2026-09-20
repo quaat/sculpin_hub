@@ -45,9 +45,11 @@ describe("upstream credential boundary", () => {
     expect(headers.get("connection")).toBeNull();
     expect(headers.get("transfer-encoding")).toBeNull();
     expect(headers.get("x-random-header")).toBeNull();
-    // Safe conversation-continuity headers pass through.
-    expect(headers.get("x-exodus-conversation-id")).toBe("conv-9");
-    expect(headers.get("x-agent-platform-include-metadata")).toBe("true");
+    // Conversation isolation (S11): NONE of the caller's headers cross upstream.
+    // The conversation id and metadata opt-in are dropped, not forwarded, so the
+    // caller can never supply a raw upstream conversation id.
+    expect(headers.get("x-exodus-conversation-id")).toBeNull();
+    expect(headers.get("x-agent-platform-include-metadata")).toBeNull();
     expect(init.body).toBe(
       JSON.stringify({
         model: "agent-1",
@@ -106,11 +108,10 @@ describe("upstream credential boundary", () => {
         "x-internal-upstream": "sculpin",
       }),
     );
+    // Conversation isolation (S11): only content-type is relayed; the upstream
+    // x-exodus-conversation-* headers are dropped (fed in above to prove it).
     expect(out).toEqual({
       "content-type": "text/event-stream",
-      "x-exodus-conversation-id": "c1",
-      "x-exodus-conversation-reused": "false",
-      "x-exodus-conversation-source": "created",
     });
   });
 });

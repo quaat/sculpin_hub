@@ -24,23 +24,22 @@ const HOP_BY_HOP = new Set([
   "proxy-authenticate",
 ]);
 
-// Request headers the Hub is willing to relay upstream. `authorization`,
-// `cookie`, and any PAT-bearing header are deliberately absent: the caller's
-// credentials are terminated here and replaced with the Hub's upstream key.
-const FORWARDABLE_REQUEST_HEADERS = new Set([
-  "x-exodus-conversation-id",
-  "x-agent-platform-include-metadata",
-]);
+// Request headers the Hub is willing to relay upstream. EMPTY by design
+// (conversation isolation, S11): NONE of the caller's headers cross to Sculpin.
+// The caller may never supply an arbitrary raw upstream conversation id, so
+// `x-exodus-conversation-*` and `x-agent-platform-include-metadata` are dropped
+// here rather than forwarded. `content-type` and the Hub `authorization` are set
+// explicitly inside `chatCompletions`; the caller's `authorization`, `cookie`,
+// and any PAT-bearing header are terminated here. The allowlist mechanism is
+// retained (an empty set) so the filtering logic stays in force.
+const FORWARDABLE_REQUEST_HEADERS = new Set<string>([]);
 
-// Response headers the Hub relays back to the caller. Anything not on this list
-// (including hop-by-hop, `server`, `x-powered-by`, or any header that could
-// reveal upstream identity) is dropped.
-const FORWARDABLE_RESPONSE_HEADERS = new Set([
-  "content-type",
-  "x-exodus-conversation-id",
-  "x-exodus-conversation-reused",
-  "x-exodus-conversation-source",
-]);
+// Response headers the Hub relays back to the caller. Reduced to ONLY
+// `content-type` (conversation isolation, S11): the upstream
+// `x-exodus-conversation-*` headers are NEVER returned to clients. Anything not
+// on this list (hop-by-hop, `server`, `x-powered-by`, or any header that could
+// reveal upstream identity or conversation state) is dropped.
+const FORWARDABLE_RESPONSE_HEADERS = new Set(["content-type"]);
 
 export type FetchLike = (
   input: string,

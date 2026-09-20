@@ -84,6 +84,7 @@ function services(overrides: Partial<DataPlaneServices> = {}): DataPlaneServices
         .fn<ChatCompletions>()
         .mockResolvedValue(new Response("{}")),
     },
+    upstreamTimeoutMs: 30000,
     ...overrides,
   };
 }
@@ -462,10 +463,70 @@ describe("POST /v1/chat/completions", () => {
       messages: [{ role: "user", content: "hello" }],
     });
     expect(reserveQuota).toHaveBeenCalledWith("org-1", 1);
-    // Response header allowlist: continuity header passes, cookies/server drop.
-    expect(response.headers["x-exodus-conversation-id"]).toBe("conv-1");
+    // Response header allowlist (S11 conversation isolation): the upstream
+    // conversation header is NOT returned to the client; cookies/server drop too.
+    expect(response.headers["x-exodus-conversation-id"]).toBeUndefined();
     expect(response.headers["set-cookie"]).toBeUndefined();
     expect(response.headers.server).toBeUndefined();
+    await server.close();
+  });
+
+  it("strips the non-standard exodus metadata block from the JSON response", async () => {
+    const upstreamBody = {
+      id: "chatcmpl-1",
+      object: "chat.completion",
+      model: "agent-uuid-123",
+      exodus: { conversation_id: "internal" },
+      choices: [],
+    };
+    const chatCompletions = vi.fn<ChatCompletions>().mockResolvedValue(
+      new Response(JSON.stringify(upstreamBody), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const server = serverWith(services({ upstream: { chatCompletions } }));
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: auth,
+      payload: body,
+    });
+    expect(response.statusCode).toBe(200);
+    // S12: internal metadata never reaches the client, yet the alias rewrite
+    // still applies.
+    expect(response.body).not.toContain("exodus");
+    expect(response.body).not.toContain("internal");
+    expect(response.json()).toMatchObject({ model: "support" });
+    expect(response.json()).not.toHaveProperty("exodus");
+    await server.close();
+  });
+
+  it("returns 504 without leaking details when the upstream is too slow", async () => {
+    // Never resolves; rejects only when the abort signal fires (the timeout).
+    const chatCompletions = vi
+      .fn<ChatCompletions>()
+      .mockImplementation(
+        (_p, { signal }) =>
+          new Promise<Response>((_res, rej) => {
+            signal.addEventListener("abort", () =>
+              rej(new Error("aborted")),
+            );
+          }),
+      );
+    const server = serverWith(
+      services({ upstreamTimeoutMs: 20, upstream: { chatCompletions } }),
+    );
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: auth,
+      payload: body,
+    });
+    expect(response.statusCode).toBe(504);
+    expect(errorCode(response.json())).toBe("upstream_timeout");
+    expect(response.body).not.toContain("aborted");
+    expect(response.body).not.toContain("internal-sculpin");
     await server.close();
   });
 

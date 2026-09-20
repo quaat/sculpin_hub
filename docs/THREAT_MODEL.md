@@ -26,9 +26,10 @@ threats most specific to the Hub-as-broker, with the controls that must never re
 | Credential/prompt leakage via logs    | No body logging by default; never log tokens, prompts, or responses                              |
 | Usage-accounting race (over-grant)    | Atomic quota reservation; test concurrent last-quota requests                                    |
 | OAuth account takeover                | state/nonce/PKCE, redirect allowlist, no unsafe email-based linking                              |
-| Header injection / hop-by-hop leakage | Header allowlist; strip hop-by-hop; never forward client Authorization/cookies upstream          |
+| Header injection / hop-by-hop leakage | Empty request-header allowlist (forward NONE of the caller's headers upstream); strip hop-by-hop; never forward client Authorization/cookies upstream (D-022) |
+| Conversation-context bleed / caller-supplied upstream conversation id | Response-header allowlist reduced to `content-type`: `x-exodus-conversation-*` never returned; caller `x-exodus-conversation-*` / `x-agent-platform-include-metadata` dropped, not forwarded; top-level `exodus` metadata stripped from response bodies (D-022) |
 | Privilege escalation                  | Server-side USER/ADMIN authz; auditable admin bootstrap via `BOOTSTRAP_ADMIN_EMAILS`             |
-| Oversized bodies / slow clients (DoS) | Body size limits (proxy `PROXY_BODY_LIMIT_BYTES`), timeouts, bounded shutdown                    |
+| Oversized bodies / slow clients (DoS) | Body size limits (proxy `PROXY_BODY_LIMIT_BYTES`), bounded upstream time-to-first-headers timeout (`SCULPIN_UPSTREAM_TIMEOUT_MS` → 504, disarmed once headers arrive so SSE is uncapped), bounded shutdown (D-022) |
 | Cross-tenant / IDOR                   | Tenant-scoped queries on every control-plane read/write                                          |
 
 ## Non-negotiables

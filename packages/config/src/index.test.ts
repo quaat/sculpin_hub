@@ -202,6 +202,34 @@ describe("data-plane configuration", () => {
     expect(config.patHashSecret).toBe("unit-test-pat-hash-secret-32chars!!!");
   });
 
+  it("defaults the upstream timeout to 30000ms when unset", () => {
+    expect(parseDataPlaneConfig(validDataPlane).upstreamTimeoutMs).toBe(30000);
+  });
+
+  it("parses a provided upstream timeout", () => {
+    expect(
+      parseDataPlaneConfig({
+        ...validDataPlane,
+        SCULPIN_UPSTREAM_TIMEOUT_MS: "5000",
+      }).upstreamTimeoutMs,
+    ).toBe(5000);
+  });
+
+  it("fails closed on an out-of-bounds upstream timeout", () => {
+    expect(() =>
+      parseDataPlaneConfig({
+        ...validDataPlane,
+        SCULPIN_UPSTREAM_TIMEOUT_MS: "999",
+      }),
+    ).toThrow(/SCULPIN_UPSTREAM_TIMEOUT_MS/);
+    expect(() =>
+      parseDataPlaneConfig({
+        ...validDataPlane,
+        SCULPIN_UPSTREAM_TIMEOUT_MS: "200000",
+      }),
+    ).toThrow(/SCULPIN_UPSTREAM_TIMEOUT_MS/);
+  });
+
   it("builds a default v1 keyring from PAT_HASH_SECRET", () => {
     const { patHashKeyring } = parseDataPlaneConfig(validDataPlane);
     expect(patHashKeyring.currentVersion).toBe(1);

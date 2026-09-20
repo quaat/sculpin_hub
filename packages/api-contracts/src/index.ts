@@ -161,6 +161,16 @@ export function upstreamUnavailableError(): OpenAiError {
     },
   };
 }
+export function upstreamTimeoutError(): OpenAiError {
+  return {
+    error: {
+      message: "The upstream service did not respond in time.",
+      type: "api_error",
+      param: null,
+      code: "upstream_timeout",
+    },
+  };
+}
 export function invalidRequestBodyError(): OpenAiError {
   return {
     error: {

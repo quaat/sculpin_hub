@@ -85,6 +85,7 @@ export interface DataPlaneConfig extends PatConfig {
   hubPublicUrl: string;
   sculpinUpstreamUrl: string;
   sculpinUpstreamApiKey: string;
+  upstreamTimeoutMs: number;
 }
 
 /**
@@ -361,6 +362,10 @@ const dataPlaneSchema = patHashSchema.extend({
   SCULPIN_UPSTREAM_URL: httpUrl,
   // Server secret the Hub sends to Sculpin as `Authorization: Bearer ...`.
   SCULPIN_UPSTREAM_API_KEY: z.string().min(1).max(4096),
+  // Bounded time (ms) the proxy waits for the upstream to return RESPONSE
+  // HEADERS before failing closed. Disarmed once headers arrive so long SSE
+  // streams are never cut off (see D-022).
+  SCULPIN_UPSTREAM_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(30000),
 });
 
 /**
@@ -383,6 +388,7 @@ export function parseDataPlaneConfig(input: NodeJS.ProcessEnv): DataPlaneConfig 
     hubPublicUrl: value.HUB_PUBLIC_URL,
     sculpinUpstreamUrl: value.SCULPIN_UPSTREAM_URL,
     sculpinUpstreamApiKey: value.SCULPIN_UPSTREAM_API_KEY,
+    upstreamTimeoutMs: value.SCULPIN_UPSTREAM_TIMEOUT_MS,
     ...buildPatConfig(value),
   };
 }

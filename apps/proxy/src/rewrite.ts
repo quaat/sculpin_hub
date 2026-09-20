@@ -22,18 +22,22 @@ export function rewriteModelInJsonBody(
 ): string {
   try {
     const value: unknown = JSON.parse(body);
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      !Array.isArray(value) &&
-      typeof (value as { model?: unknown }).model === "string"
-    ) {
-      (value as { model: string }).model = publicAlias;
-      return JSON.stringify(value);
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      const object = value as Record<string, unknown>;
+      // S12 metadata-leak defense: Sculpin may attach a non-standard top-level
+      // `exodus` metadata object; strip it so internal metadata never reaches
+      // the client, even if the Hub never opted in.
+      if (Object.prototype.hasOwnProperty.call(object, "exodus"))
+        delete object.exodus;
+      if (typeof object.model === "string") object.model = publicAlias;
+      // Re-serialize so both the `exodus` deletion and any `model` rewrite take
+      // effect on the caller-visible body.
+      return JSON.stringify(object);
     }
   } catch {
     // Not JSON (or otherwise unparseable): leave the body untouched.
   }
+  // Not a plain object (array/primitive) or unparseable: return verbatim.
   return body;
 }
 
@@ -58,11 +62,15 @@ function rewriteEvent(event: string, publicAlias: string): string {
         if (
           typeof value === "object" &&
           value !== null &&
-          !Array.isArray(value) &&
-          typeof (value as { model?: unknown }).model === "string"
+          !Array.isArray(value)
         ) {
-          (value as { model: string }).model = publicAlias;
-          return `data: ${JSON.stringify(value)}`;
+          const object = value as Record<string, unknown>;
+          // S12: strip the non-standard top-level `exodus` metadata object so
+          // internal metadata never reaches the client inside a data event.
+          if (Object.prototype.hasOwnProperty.call(object, "exodus"))
+            delete object.exodus;
+          if (typeof object.model === "string") object.model = publicAlias;
+          return `data: ${JSON.stringify(object)}`;
         }
       } catch {
         // Malformed JSON payload: keep the line verbatim.

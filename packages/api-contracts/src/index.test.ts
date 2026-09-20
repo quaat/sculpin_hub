@@ -14,6 +14,7 @@ import {
   proxyClientError,
   toModelList,
   unsupportedOperation,
+  upstreamTimeoutError,
   upstreamUnavailableError,
 } from "./index.js";
 describe("API contracts", () => {
@@ -59,6 +60,7 @@ describe("API contracts", () => {
       [noActiveSubscriptionError(), "no_active_subscription"],
       [insufficientQuotaError(), "insufficient_quota"],
       [upstreamUnavailableError(), "upstream_unavailable"],
+      [upstreamTimeoutError(), "upstream_timeout"],
       [invalidRequestBodyError(), "invalid_request"],
     ];
     for (const [body, code] of cases) {

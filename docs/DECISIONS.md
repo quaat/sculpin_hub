@@ -277,15 +277,20 @@ handling isolated to a single module. This resolves Phase A/B/D of the "next up"
    which registers `GET /v1/models` + `POST /v1/chat/completions` and nothing else. Routes are never
    selected from env or client input; every other `/v1/*` path stays fail-closed → 404.
 
-2. **Centralized credential boundary (CLAUDE.md rules 3-4).** `apps/proxy/src/upstream.ts` is the
+2. **Centralized credential boundary (CLAUDE.md rules 3-4).** _Header-allowlist details superseded by
+   [[D-022]] (conversation isolation): the request allowlist is now EMPTY and the response allowlist is
+   reduced to `content-type`._ `apps/proxy/src/upstream.ts` is the
    ONLY code that reads `SCULPIN_UPSTREAM_URL`/`SCULPIN_UPSTREAM_API_KEY`. It strips the caller's
-   `Authorization`/`cookie`/`proxy-authorization` and all hop-by-hop headers, forwards only a small
-   request-header allowlist (`x-exodus-conversation-id`, `x-agent-platform-include-metadata`), and
+   `Authorization`/`cookie`/`proxy-authorization` and all hop-by-hop headers, forwards only a reviewed
+   request-header allowlist (now EMPTY per [[D-022]]), and
    injects `Authorization: Bearer ${SCULPIN_UPSTREAM_API_KEY}`. Responses are projected onto a
    caller-safe header allowlist (drops `set-cookie`, `server`, internal headers). The internal URL/key
    never touch logs, response bodies, or error pages.
 
-3. **Fail-closed pipeline order.** authenticate PAT (single opaque 401, [[D-016]]) → validate body
+3. **Fail-closed pipeline order.** _"byte-for-byte passthrough" superseded: S9 replaced it with an
+   alias rewrite, and [[D-022]] adds metadata stripping plus a bounded first-headers timeout → 504._
+   authenticate PAT (single
+   opaque 401, [[D-016]]) → validate body
    (400) → entitlement active (403, [[D-015]]) → resolve PUBLISHED alias→agent (404 BEFORE quota, so
    an unknown model never burns budget, [[D-014]]) → atomic `reserveQuota` (429 BEFORE any upstream
    call, [[D-015]] rule 6) → rewrite `model` to the upstream agent id → call upstream → byte-for-byte
@@ -469,6 +474,41 @@ plane no longer requires (or reads) the upstream URL/key. The proxy remains the 
 URL/key required, secret-safe errors) pass; full web suite (145) and config suite (34) green;
 `parseDataPlaneConfig` behavior unchanged (its existing tests still pass). Independent security review
 required before sign-off. **By:** S7 implementation pass.
+
+## D-022 — S10-12: conversation isolation, bounded upstream timeout, metadata-leak stripping
+
+**Context.** Three data-plane security gaps remained after S9. The upstream module still forwarded the
+caller's `x-exodus-conversation-id` / `x-agent-platform-include-metadata` upstream and returned the
+three `x-exodus-conversation-*` headers to clients, letting a caller supply a raw upstream conversation
+id and letting upstream conversation state cross the boundary. Sculpin can also attach a non-standard
+top-level `exodus` metadata object to response bodies. And a hung upstream could hold a Hub connection
+open indefinitely. This tightens `.claude/rules/proxy-security.md` items (conversation isolation, SSE
+streaming, logging/limits) that [[D-017]] items 2-3 no longer fully describe.
+
+1. **Conversation isolation (S11).** `FORWARDABLE_REQUEST_HEADERS` in `apps/proxy/src/upstream.ts` is
+   now an EMPTY set — NONE of the caller's headers cross to Sculpin; `content-type` and the Hub
+   `Authorization` are set explicitly at the credential boundary. `FORWARDABLE_RESPONSE_HEADERS` is
+   reduced to ONLY `content-type`, so the upstream `x-exodus-conversation-*` headers are never returned
+   to clients. Callers can no longer supply an arbitrary raw upstream conversation id. The allowlist
+   mechanism is retained (empty set) so the filtering logic stays enforced.
+
+2. **Bounded time-to-first-headers timeout (S10).** New validated config `SCULPIN_UPSTREAM_TIMEOUT_MS`
+   (`upstreamTimeoutMs`, default 30000, min 1000, max 120000). `handleChatCompletions` arms a timer
+   that aborts the shared `AbortController` if the upstream does not return RESPONSE HEADERS in time,
+   returning an opaque OpenAI-shaped 504 (`upstream_timeout`). The timer is DISARMED the moment headers
+   arrive, so legitimately long SSE streams are never cut off. Client disconnect still aborts via the
+   same controller; any other upstream throw remains an opaque 502.
+
+3. **Metadata-leak stripping (S12).** The rewrite helpers (`rewriteModelInJsonBody` and the SSE
+   `rewriteEvent`) now defensively delete an own top-level `exodus` property when the parsed payload is
+   a plain object, in addition to rewriting `model` to the public alias. Non-object / unparseable
+   payloads and the `[DONE]` / keepalive frames pass through verbatim; the transform never throws.
+
+**Verification.** api-contracts (`upstreamTimeoutError` → `upstream_timeout`), config (default +
+provided `SCULPIN_UPSTREAM_TIMEOUT_MS`), and proxy suites green; proxy typecheck + lint clean. New
+proxy tests: request/response conversation headers dropped; non-streaming + SSE `exodus` stripped; a
+slow upstream returns 504 with no internal detail. `.env.example` and `THREAT_MODEL.md` updated.
+Independent security review required before sign-off. **By:** S10-12 implementation pass.
 
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 
