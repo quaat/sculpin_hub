@@ -114,6 +114,33 @@ describe("connect view (S17 client instructions)", () => {
     expect(lower).not.toContain("upstream");
     expect(lower).not.toContain("sculpin_upstream");
   });
+
+  it("reads the PAT from the environment in the Python snippet (not a literal)", () => {
+    const html = renderToStaticMarkup(
+      <ConnectView model={model} baseUrl={baseUrl} />,
+    );
+    // Python must read the env var; the literal string would be sent verbatim as
+    // the key and 401. curl/Node keep their own env references.
+    expect(html).toContain("import os");
+    expect(html).toContain('os.environ[&quot;SCULPIN_HUB_PAT&quot;]');
+    expect(html).not.toContain('api_key=&quot;$SCULPIN_HUB_PAT&quot;');
+  });
+
+  it("renders admin-authored access instructions only when present", () => {
+    const withInstructions = renderToStaticMarkup(
+      <ConnectView
+        model={{ ...model, accessInstructions: "Ask for the weather." }}
+        baseUrl={baseUrl}
+      />,
+    );
+    expect(withInstructions).toContain("Access instructions");
+    expect(withInstructions).toContain("Ask for the weather.");
+
+    const withoutInstructions = renderToStaticMarkup(
+      <ConnectView model={model} baseUrl={baseUrl} />,
+    );
+    expect(withoutInstructions).not.toContain("Access instructions");
+  });
 });
 
 describe("tokens view (metadata only)", () => {

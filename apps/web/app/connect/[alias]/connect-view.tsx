@@ -25,11 +25,12 @@ export function ConnectView({
     `  }'`,
   ].join("\n");
   const pythonSnippet = [
+    `import os`,
     `from openai import OpenAI`,
     ``,
     `client = OpenAI(`,
     `    base_url="${baseUrl}",`,
-    `    api_key="$SCULPIN_HUB_PAT",  # your sclp_pat_… token`,
+    `    api_key=os.environ["SCULPIN_HUB_PAT"],  # your sclp_pat_… token`,
     `)`,
     ``,
     `resp = client.chat.completions.create(`,
