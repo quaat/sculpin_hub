@@ -134,6 +134,53 @@ suite("catalogue repository", () => {
     expect(JSON.stringify(models)).not.toMatch(/internal-agent/);
   });
 
+  it("round-trips access instructions and edits them via updateMetadata, never touching the alias/agent mapping", async () => {
+    const entry = await repository.create(
+      {
+        publicAlias: "sculpin-guide",
+        upstreamAgentId: "internal-agent-guide",
+        displayName: "Sculpin Guide",
+        description: "A guided agent.",
+        accessInstructions: "Step 1\nStep 2",
+      },
+      adminId,
+    );
+    expect(entry.accessInstructions).toBe("Step 1\nStep 2");
+
+    const updated = await repository.updateMetadata(
+      entry.id,
+      {
+        displayName: "Renamed Guide",
+        description: null,
+        accessInstructions: "New instructions.",
+      },
+      adminId,
+    );
+    expect(updated?.displayName).toBe("Renamed Guide");
+    expect(updated?.description).toBeUndefined();
+    expect(updated?.accessInstructions).toBe("New instructions.");
+    expect(updated?.version).toBe(2);
+    // The immutable mapping is unchanged by a metadata edit.
+    expect(updated?.publicAlias).toBe("sculpin-guide");
+    expect(updated?.upstreamAgentId).toBe("internal-agent-guide");
+
+    // Published access instructions surface in the public projection.
+    await repository.publish(entry.id, adminId);
+    const published = (await repository.listPublished()).find(
+      (m) => m.id === "sculpin-guide",
+    );
+    expect(published?.accessInstructions).toBe("New instructions.");
+  });
+
+  it("returns undefined when updating metadata of a non-existent entry", async () => {
+    const missing = await repository.updateMetadata(
+      "00000000-0000-4000-8000-000000000000",
+      { displayName: "Nope" },
+      adminId,
+    );
+    expect(missing).toBeUndefined();
+  });
+
   it("returns undefined when publishing a non-existent entry", async () => {
     const missing = await repository.publish(
       "00000000-0000-4000-8000-000000000000",

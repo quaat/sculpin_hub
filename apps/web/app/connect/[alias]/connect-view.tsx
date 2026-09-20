@@ -93,6 +93,14 @@ export function ConnectView({
           gated by your subscription entitlement and the token&rsquo;s scopes.
         </p>
       </section>
+      {model.accessInstructions ? (
+        <section className="empty" aria-labelledby="connect-access">
+          <h2 id="connect-access">Access instructions</h2>
+          <pre className="code-sample">
+            <code>{model.accessInstructions}</code>
+          </pre>
+        </section>
+      ) : null}
       <section className="empty" aria-labelledby="connect-quickstart">
         <h2 id="connect-quickstart">Quick start</h2>
         <p className="muted">

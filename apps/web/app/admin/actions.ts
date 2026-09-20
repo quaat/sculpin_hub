@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import {
   DomainConflictError,
   DomainValidationError,
+  type CatalogueEntryMetadataPatch,
   type PlanInput,
   type PlanKind,
   type PlanPatch,
@@ -16,6 +17,7 @@ import {
   createCatalogueEntryFromDiscovered,
   publishCatalogueEntry,
   unpublishCatalogueEntry,
+  updateCatalogueMetadata,
 } from "../lib/catalogue";
 import { DiscoveryError } from "../lib/discovery";
 import {
@@ -110,6 +112,43 @@ export async function unpublishCatalogueAction(
   }
 }
 
+/**
+ * Edit a catalogue entry's human-facing metadata (display name / description /
+ * access instructions). The public alias and upstream-agent mapping are NEVER
+ * editable — this form does not render or read them, and the underlying patch
+ * type cannot carry them. An empty description / access-instructions field
+ * CLEARS the column (null); display name is always required.
+ */
+export async function updateCatalogueMetadataAction(
+  formData: FormData,
+): Promise<ActionResult> {
+  const id = str(formData, "id");
+  const displayName = str(formData, "displayName");
+  const description = str(formData, "description");
+  const accessInstructions = str(formData, "accessInstructions");
+  const patch: CatalogueEntryMetadataPatch = {
+    displayName,
+    description: description.length > 0 ? description : null,
+    accessInstructions: accessInstructions.length > 0 ? accessInstructions : null,
+  };
+  try {
+    const updated = await updateCatalogueMetadata(id, patch);
+    revalidatePath("/admin/catalogue");
+    if (!updated) return { ok: false, message: "Catalogue entry not found." };
+    return { ok: true, message: "Catalogue entry updated." };
+  } catch (error) {
+    if (error instanceof CatalogueInputError) {
+      return { ok: false, message: "Invalid catalogue entry id." };
+    }
+    if (error instanceof DomainValidationError) {
+      return { ok: false, message: error.message };
+    }
+    return (
+      forbiddenOrError(error) ?? { ok: false, message: "Unable to update the entry." }
+    );
+  }
+}
+
 // --- Discovery-driven catalogue creation ----------------------------------
 
 export async function createFromDiscoveredAction(
@@ -118,6 +157,7 @@ export async function createFromDiscoveredAction(
   const publicAlias = str(formData, "publicAlias");
   const displayName = str(formData, "displayName");
   const description = str(formData, "description");
+  const accessInstructions = str(formData, "accessInstructions");
   const upstreamAgentId = str(formData, "upstreamAgentId");
   try {
     await createCatalogueEntryFromDiscovered({
@@ -125,6 +165,7 @@ export async function createFromDiscoveredAction(
       displayName,
       upstreamAgentId,
       ...(description.length > 0 ? { description } : {}),
+      ...(accessInstructions.length > 0 ? { accessInstructions } : {}),
     });
     revalidatePath("/admin/catalogue");
     revalidatePath("/admin/discovery");

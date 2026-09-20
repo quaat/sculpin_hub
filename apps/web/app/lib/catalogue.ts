@@ -3,6 +3,7 @@ import {
   stableDiscoveredAgentIds,
   type CatalogueEntry,
   type CatalogueEntryInput,
+  type CatalogueEntryMetadataPatch,
   type CatalogueRepository,
   type DiscoveredAgent,
   type PublicModel,
@@ -87,6 +88,24 @@ export async function createCatalogueEntry(
   return repository.create(input, ctx.user.id);
 }
 
+/**
+ * Admin-gated metadata edit for a stored catalogue entry. Only display name /
+ * description / access instructions are editable; the public alias and the
+ * upstream-agent mapping are IMMUTABLE (the patch type cannot carry them and the
+ * repository never updates those columns), so a published alias can never be
+ * silently re-pointed at a different upstream agent.
+ */
+export async function updateCatalogueMetadata(
+  id: string,
+  patch: CatalogueEntryMetadataPatch,
+  deps?: CatalogueAdminDeps,
+): Promise<CatalogueEntry | undefined> {
+  const ctx = await requireAdmin(deps?.authz);
+  assertEntryId(id);
+  const repository = await resolveRepository(deps?.repository);
+  return repository.updateMetadata(id, patch, ctx.user.id);
+}
+
 export async function publishCatalogueEntry(
   id: string,
   deps?: CatalogueAdminDeps,
@@ -154,6 +173,7 @@ export interface CreateFromDiscoveredInput {
   readonly publicAlias: string;
   readonly displayName: string;
   readonly description?: string;
+  readonly accessInstructions?: string;
   /**
    * The STABLE discovered agent id (a UUID form) to bind this alias to. Validated
    * against the live discovery set before creation.
@@ -192,6 +212,9 @@ export async function createCatalogueEntryFromDiscovered(
     upstreamAgentId: input.upstreamAgentId,
     displayName: input.displayName,
     ...(input.description !== undefined ? { description: input.description } : {}),
+    ...(input.accessInstructions !== undefined
+      ? { accessInstructions: input.accessInstructions }
+      : {}),
   };
   return repository.create(entryInput, ctx.user.id);
 }

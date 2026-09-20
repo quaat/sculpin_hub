@@ -202,6 +202,14 @@ export interface CatalogueEntryInput {
   readonly upstreamAgentId: string;
   readonly displayName: string;
   readonly description?: string;
+  /**
+   * Admin-authored, client-SAFE "how to use this offering" prose shown on the
+   * Connect page. Multi-line plain text (tabs/newlines allowed); MUST NOT
+   * reference the internal Sculpin URL / credential / upstream agent id — that
+   * is a human authoring responsibility, but the value itself is public by
+   * design and carries no internal identifier by construction.
+   */
+  readonly accessInstructions?: string;
 }
 
 export interface CatalogueEntry {
@@ -210,6 +218,7 @@ export interface CatalogueEntry {
   readonly upstreamAgentId: string;
   readonly displayName: string;
   readonly description?: string;
+  readonly accessInstructions?: string;
   readonly status: CatalogueEntryStatus;
   readonly version: number;
 }
@@ -217,16 +226,48 @@ export interface CatalogueEntry {
 /**
  * Client-safe projection of a catalogue entry. It deliberately carries NO
  * `upstreamAgentId` (and no internal ids), so passing it to a client can never
- * leak the upstream mapping.
+ * leak the upstream mapping. `accessInstructions` is admin-authored public prose
+ * and is safe to expose here.
  */
 export interface PublicModel {
   readonly id: string;
   readonly displayName: string;
   readonly description?: string;
+  readonly accessInstructions?: string;
+}
+
+/**
+ * Metadata-only patch for a stored catalogue entry. It deliberately CANNOT
+ * carry `publicAlias` or `upstreamAgentId`: the alias↔upstream-agent mapping is
+ * immutable once created so a published alias can never be silently re-pointed
+ * at a different upstream agent (CLAUDE.md rules 3-4). Only human-facing display
+ * metadata is editable.
+ */
+export interface CatalogueEntryMetadataPatch {
+  readonly displayName?: string;
+  readonly description?: string | null;
+  readonly accessInstructions?: string | null;
 }
 
 const catalogueAliasPattern = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const controlCharPattern = /[\p{Cc}\p{Cf}]/u;
+const ACCESS_INSTRUCTIONS_MAX = 4096;
+
+/**
+ * Multi-line prose control-char check: tabs / newlines / carriage returns are
+ * permitted (access instructions are multi-line), every other control or format
+ * character is rejected.
+ */
+function hasDisallowedProseControlChars(text: string): boolean {
+  return controlCharPattern.test(text.replace(/[\t\n\r]/g, ""));
+}
+
+function validateAccessInstructions(value: string): void {
+  if (value.length > ACCESS_INSTRUCTIONS_MAX || hasDisallowedProseControlChars(value))
+    throw new DomainValidationError(
+      `Access instructions must be at most ${ACCESS_INSTRUCTIONS_MAX} characters with no control characters other than tabs and newlines.`,
+    );
+}
 
 export function validateCatalogueEntryInput(input: CatalogueEntryInput): void {
   if (!catalogueAliasPattern.test(input.publicAlias))
@@ -258,6 +299,40 @@ export function validateCatalogueEntryInput(input: CatalogueEntryInput): void {
     throw new DomainValidationError(
       "Description must be at most 2048 characters with no control characters.",
     );
+  if (input.accessInstructions !== undefined)
+    validateAccessInstructions(input.accessInstructions);
+}
+
+/**
+ * Validate a metadata-only patch (display name / description / access
+ * instructions). `null` clears the optional description / access-instructions
+ * columns; a provided string is bounds-checked as on create. Fails closed on any
+ * out-of-range field before the repository touches the DB.
+ */
+export function validateCatalogueEntryMetadataPatch(
+  patch: CatalogueEntryMetadataPatch,
+): void {
+  if (patch.displayName !== undefined) {
+    if (
+      patch.displayName.length < 1 ||
+      patch.displayName.length > 120 ||
+      !displayNamePattern.test(patch.displayName)
+    )
+      throw new DomainValidationError(
+        "Display name must be non-empty and at most 120 characters.",
+      );
+  }
+  if (patch.description !== undefined && patch.description !== null) {
+    if (
+      patch.description.length > 2048 ||
+      controlCharPattern.test(patch.description)
+    )
+      throw new DomainValidationError(
+        "Description must be at most 2048 characters with no control characters.",
+      );
+  }
+  if (patch.accessInstructions !== undefined && patch.accessInstructions !== null)
+    validateAccessInstructions(patch.accessInstructions);
 }
 
 export function toPublicModel(entry: CatalogueEntry): PublicModel {
@@ -267,6 +342,9 @@ export function toPublicModel(entry: CatalogueEntry): PublicModel {
     ...(entry.description !== undefined
       ? { description: entry.description }
       : {}),
+    ...(entry.accessInstructions !== undefined
+      ? { accessInstructions: entry.accessInstructions }
+      : {}),
   };
 }
 
@@ -275,6 +353,15 @@ export interface CatalogueRepository {
     input: CatalogueEntryInput,
     adminUserId: UserId,
   ): Promise<CatalogueEntry>;
+  /**
+   * Update ONLY human-facing metadata (display name / description / access
+   * instructions). Never mutates the alias or the upstream-agent mapping.
+   */
+  updateMetadata(
+    id: string,
+    patch: CatalogueEntryMetadataPatch,
+    adminUserId: UserId,
+  ): Promise<CatalogueEntry | undefined>;
   publish(id: string, adminUserId: UserId): Promise<CatalogueEntry | undefined>;
   unpublish(
     id: string,

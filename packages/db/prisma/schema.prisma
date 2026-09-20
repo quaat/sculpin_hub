@@ -222,23 +222,24 @@ model OutboxEvent {
 // (fail closed); the upstream agent id is never projected to clients. Admins are
 // recorded via created_by/updated_by for traceability.
 model CatalogueEntry {
-  id                String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  publicAlias       String                       @unique(map: "catalogue_entries_public_alias_key") @map("public_alias") @db.VarChar(64)
-  upstreamAgentId   String                       @map("upstream_agent_id") @db.VarChar(255)
-  displayName       String                       @map("display_name") @db.VarChar(120)
-  description       String?                      @db.VarChar(2048)
-  status            CatalogueEntryStatus         @default(draft)
-  createdByUserId   String?                      @map("created_by_user_id") @db.Uuid
-  updatedByUserId   String?                      @map("updated_by_user_id") @db.Uuid
-  createdAt         DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime                     @default(now()) @map("updated_at") @db.Timestamptz(6)
-  version           Int                          @default(1)
-  createdBy         User?                        @relation("CatalogueEntryCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  updatedBy         User?                        @relation("CatalogueEntryUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  planLinks         PlanCatalogueEntry[]
-  subscriptionLinks SubscriptionCatalogueEntry[]
-  patScopes         PersonalAccessTokenScope[]
-  usageEvents       UsageEvent[]
+  id                 String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  publicAlias        String                       @unique(map: "catalogue_entries_public_alias_key") @map("public_alias") @db.VarChar(64)
+  upstreamAgentId    String                       @map("upstream_agent_id") @db.VarChar(255)
+  displayName        String                       @map("display_name") @db.VarChar(120)
+  description        String?                      @db.VarChar(2048)
+  accessInstructions String?                      @map("access_instructions") @db.VarChar(4096)
+  status             CatalogueEntryStatus         @default(draft)
+  createdByUserId    String?                      @map("created_by_user_id") @db.Uuid
+  updatedByUserId    String?                      @map("updated_by_user_id") @db.Uuid
+  createdAt          DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime                     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version            Int                          @default(1)
+  createdBy          User?                        @relation("CatalogueEntryCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  updatedBy          User?                        @relation("CatalogueEntryUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  planLinks          PlanCatalogueEntry[]
+  subscriptionLinks  SubscriptionCatalogueEntry[]
+  patScopes          PersonalAccessTokenScope[]
+  usageEvents        UsageEvent[]
 
   @@index([status], map: "idx_catalogue_entries_status")
   @@map("catalogue_entries")

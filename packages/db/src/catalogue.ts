@@ -1,8 +1,10 @@
 import {
   DomainConflictError,
   validateCatalogueEntryInput,
+  validateCatalogueEntryMetadataPatch,
   type CatalogueEntry,
   type CatalogueEntryInput,
+  type CatalogueEntryMetadataPatch,
   type CatalogueEntryStatus,
   type CatalogueRepository,
   type PublicModel,
@@ -15,12 +17,13 @@ interface CatalogueRow {
   upstreamAgentId: string;
   displayName: string;
   description: string | null;
+  accessInstructions: string | null;
   status: CatalogueEntryStatus;
   version: number;
 }
 
 const SELECT_COLUMNS =
-  'id, public_alias AS "publicAlias", upstream_agent_id AS "upstreamAgentId", display_name AS "displayName", description, status, version';
+  'id, public_alias AS "publicAlias", upstream_agent_id AS "upstreamAgentId", display_name AS "displayName", description, access_instructions AS "accessInstructions", status, version';
 
 function mapRow(row: CatalogueRow): CatalogueEntry {
   return {
@@ -29,6 +32,9 @@ function mapRow(row: CatalogueRow): CatalogueEntry {
     upstreamAgentId: row.upstreamAgentId,
     displayName: row.displayName,
     ...(row.description !== null ? { description: row.description } : {}),
+    ...(row.accessInstructions !== null
+      ? { accessInstructions: row.accessInstructions }
+      : {}),
     status: row.status,
     version: row.version,
   };
@@ -54,14 +60,15 @@ export class PostgresCatalogueRepository implements CatalogueRepository {
     validateCatalogueEntryInput(input);
     try {
       const result = await this.pool.query<CatalogueRow>(
-        `INSERT INTO catalogue_entries (public_alias, upstream_agent_id, display_name, description, created_by_user_id, updated_by_user_id)
-         VALUES ($1,$2,$3,$4,$5,$5)
+        `INSERT INTO catalogue_entries (public_alias, upstream_agent_id, display_name, description, access_instructions, created_by_user_id, updated_by_user_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$6)
          RETURNING ${SELECT_COLUMNS}`,
         [
           input.publicAlias,
           input.upstreamAgentId,
           input.displayName,
           input.description ?? null,
+          input.accessInstructions ?? null,
           adminUserId,
         ],
       );
@@ -71,6 +78,39 @@ export class PostgresCatalogueRepository implements CatalogueRepository {
     } catch (error) {
       mapCatalogueConflict(error);
     }
+  }
+
+  async updateMetadata(
+    id: string,
+    patch: CatalogueEntryMetadataPatch,
+    adminUserId: string,
+  ): Promise<CatalogueEntry | undefined> {
+    // Fail closed on any malformed field before touching the DB. This method
+    // NEVER updates public_alias or upstream_agent_id — the alias↔agent mapping
+    // is immutable once created.
+    validateCatalogueEntryMetadataPatch(patch);
+    const sets: string[] = [];
+    const values: unknown[] = [id];
+    const push = (column: string, value: unknown): void => {
+      values.push(value);
+      sets.push(`${column} = $${values.length}`);
+    };
+    if (patch.displayName !== undefined) push("display_name", patch.displayName);
+    if (patch.description !== undefined) push("description", patch.description);
+    if (patch.accessInstructions !== undefined)
+      push("access_instructions", patch.accessInstructions);
+    values.push(adminUserId);
+    const actorParam = `$${values.length}`;
+    if (sets.length === 0) sets.push("updated_at = now()");
+    const result = await this.pool.query<CatalogueRow>(
+      `UPDATE catalogue_entries
+       SET ${sets.join(", ")}, updated_by_user_id = ${actorParam}, updated_at = now(), version = version + 1
+       WHERE id = $1
+       RETURNING ${SELECT_COLUMNS}`,
+      values,
+    );
+    const row = result.rows[0];
+    return row ? mapRow(row) : undefined;
   }
 
   private async setStatus(
@@ -114,14 +154,18 @@ export class PostgresCatalogueRepository implements CatalogueRepository {
       publicAlias: string;
       displayName: string;
       description: string | null;
+      accessInstructions: string | null;
     }>(
-      `SELECT public_alias AS "publicAlias", display_name AS "displayName", description
+      `SELECT public_alias AS "publicAlias", display_name AS "displayName", description, access_instructions AS "accessInstructions"
        FROM catalogue_entries WHERE status='published' ORDER BY public_alias`,
     );
     return result.rows.map((row) => ({
       id: row.publicAlias,
       displayName: row.displayName,
       ...(row.description !== null ? { description: row.description } : {}),
+      ...(row.accessInstructions !== null
+        ? { accessInstructions: row.accessInstructions }
+        : {}),
     }));
   }
 

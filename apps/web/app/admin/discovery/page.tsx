@@ -115,6 +115,15 @@ export default async function AdminDiscovery() {
                   <input type="text" name="description" maxLength={2048} />
                 </label>
                 <label>
+                  Access instructions (optional)
+                  <textarea
+                    name="accessInstructions"
+                    rows={4}
+                    maxLength={4096}
+                    placeholder="How to use this offering. Shown to entitled users on the Connect page."
+                  />
+                </label>
+                <label>
                   Upstream agent (UUID)
                   <select name="upstreamAgentId" required defaultValue="">
                     <option value="" disabled>
