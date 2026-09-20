@@ -4,6 +4,17 @@ import { useActionState, useState } from "react";
 import { mintTokenAction, type MintResult } from "./actions";
 
 /**
+ * A published + entitled offering the caller may scope a token to. Client-safe:
+ * carries only the public alias (the OpenAI `model` id) and a display name — never
+ * an internal catalogue id or the upstream agent id. The alias is the value the
+ * form submits; the server re-resolves it to the immutable scope id.
+ */
+export interface OfferingOption {
+  readonly publicAlias: string;
+  readonly displayName: string;
+}
+
+/**
  * PAT mint form + ONE-TIME reveal (web-control-plane PAT hygiene).
  *
  * SECURITY: the raw token returned by the action lives ONLY in transient React
@@ -20,13 +31,20 @@ async function runMint(
   return mintTokenAction(formData);
 }
 
-export function MintToken() {
+export function MintToken({
+  offerings,
+}: {
+  readonly offerings: readonly OfferingOption[];
+}) {
   const [state, action, pending] = useActionState<MintResult | null, FormData>(
     runMint,
     null,
   );
   const [dismissed, setDismissed] = useState(false);
   const [copied, setCopied] = useState(false);
+  // Scope is an explicit choice; "all" (unscoped, inherit full entitlement) is
+  // the default. Selecting specific offerings requires at least one checkbox.
+  const [scopeMode, setScopeMode] = useState<"all" | "selected">("all");
 
   const revealed = state?.ok && !dismissed ? state : null;
 
@@ -58,6 +76,50 @@ export function MintToken() {
           Expires (optional)
           <input type="date" name="expiresAt" autoComplete="off" />
         </label>
+        <fieldset className="scope-fieldset">
+          <legend>Scope</legend>
+          <label className="scope-choice">
+            <input
+              type="radio"
+              name="scopeMode"
+              value="all"
+              checked={scopeMode === "all"}
+              onChange={() => setScopeMode("all")}
+            />
+            All offerings I&rsquo;m entitled to (current and future)
+          </label>
+          <label className="scope-choice">
+            <input
+              type="radio"
+              name="scopeMode"
+              value="selected"
+              checked={scopeMode === "selected"}
+              onChange={() => setScopeMode("selected")}
+              disabled={offerings.length === 0}
+            />
+            Only selected offerings
+          </label>
+          {offerings.length === 0 ? (
+            <p className="muted">
+              You have no published, entitled offerings to scope to yet. Claim a
+              plan to gain access, then mint a scoped token.
+            </p>
+          ) : (
+            <div className="scope-offerings" aria-hidden={scopeMode !== "selected"}>
+              {offerings.map((offering) => (
+                <label key={offering.publicAlias} className="scope-offering">
+                  <input
+                    type="checkbox"
+                    name="scopeAlias"
+                    value={offering.publicAlias}
+                    disabled={scopeMode !== "selected"}
+                  />
+                  {offering.displayName} <code>{offering.publicAlias}</code>
+                </label>
+              ))}
+            </div>
+          )}
+        </fieldset>
         <button type="submit" className="button" disabled={pending}>
           {pending ? "Minting…" : "Mint token"}
         </button>

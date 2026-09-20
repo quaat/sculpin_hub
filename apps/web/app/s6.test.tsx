@@ -117,23 +117,76 @@ describe("connect view (S17 client instructions)", () => {
 });
 
 describe("tokens view (metadata only)", () => {
+  const unscoped: PatRecord = {
+    id: "11111111-1111-1111-1111-111111111111",
+    publicId: "aaaaaaaaaaaaaaaaaaaaaa",
+    userId: "22222222-2222-2222-2222-222222222222",
+    organizationId: "33333333-3333-3333-3333-333333333333",
+    name: "laptop-cli",
+    status: "active",
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    scopes: [],
+  };
+
   it("lists PAT metadata and never a raw secret", () => {
-    const tokens: readonly PatRecord[] = [
-      {
-        id: "11111111-1111-1111-1111-111111111111",
-        publicId: "aaaaaaaaaaaaaaaaaaaaaa",
-        userId: "22222222-2222-2222-2222-222222222222",
-        organizationId: "33333333-3333-3333-3333-333333333333",
-        name: "laptop-cli",
-        status: "active",
-        createdAt: new Date("2026-01-01T00:00:00.000Z"),
-        scopes: [],
-      },
-    ];
-    const html = renderToStaticMarkup(<TokensView tokens={tokens} />);
+    const html = renderToStaticMarkup(
+      <TokensView
+        tokens={[unscoped]}
+        offerings={[]}
+        scopeLabels={new Map()}
+      />,
+    );
     expect(html).toContain("aaaaaaaaaaaaaaaaaaaaaa");
     expect(html).toContain("laptop-cli");
+    expect(html).toContain("All entitled");
     expect(html).not.toContain("sclp_pat_");
+  });
+
+  it("labels a scoped token by display name + alias, never the raw scope uuid", () => {
+    const scopeId = "44444444-4444-4444-4444-444444444444";
+    const scoped: PatRecord = {
+      ...unscoped,
+      id: "55555555-5555-5555-5555-555555555555",
+      publicId: "bbbbbbbbbbbbbbbbbbbbbb",
+      name: "scoped-cli",
+      scopes: [scopeId],
+    };
+    const html = renderToStaticMarkup(
+      <TokensView
+        tokens={[scoped]}
+        offerings={[]}
+        scopeLabels={new Map([[scopeId, "Sculpin Pro (sculpin-pro)"]])}
+      />,
+    );
+    expect(html).toContain("Sculpin Pro (sculpin-pro)");
+    // The internal catalogue-entry uuid is NEVER rendered.
+    expect(html).not.toContain(scopeId);
+  });
+
+  it("renders a neutral fallback for an unresolved scope id (never the uuid)", () => {
+    const scopeId = "66666666-6666-6666-6666-666666666666";
+    const scoped: PatRecord = { ...unscoped, scopes: [scopeId] };
+    const html = renderToStaticMarkup(
+      <TokensView tokens={[scoped]} offerings={[]} scopeLabels={new Map()} />,
+    );
+    expect(html).toContain("Restricted offering");
+    expect(html).not.toContain(scopeId);
+  });
+
+  it("offers only published+entitled offerings by name+alias in the mint scope selector", () => {
+    const html = renderToStaticMarkup(
+      <TokensView
+        tokens={[unscoped]}
+        offerings={[{ publicAlias: "sculpin-pro", displayName: "Sculpin Pro" }]}
+        scopeLabels={new Map()}
+      />,
+    );
+    // The checkbox carries the PUBLIC alias as its value (server re-resolves it).
+    expect(html).toContain('value="sculpin-pro"');
+    expect(html).toContain("Sculpin Pro");
+    // Explicit scope modes are present so a token is never silently unscoped.
+    expect(html).toContain('value="all"');
+    expect(html).toContain('value="selected"');
   });
 });
 
@@ -153,7 +206,7 @@ describe("mint reveal shows the raw token once", () => {
     // (no token) — the reveal only appears after the action resolves. We assert
     // the mint form renders and that a static render contains no token / no
     // persistence sink (localStorage/sessionStorage).
-    const html = renderToStaticMarkup(<MintToken />);
+    const html = renderToStaticMarkup(<MintToken offerings={[]} />);
     expect(html).toContain("Mint token");
     expect(html).not.toContain(token);
     // The reveal path renders the token as text inside a <code>, never into a

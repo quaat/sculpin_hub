@@ -1,12 +1,14 @@
 import Link from "next/link";
 import type { PatRecord } from "@sculpin/domain";
-import { MintToken } from "./mint-token";
+import { MintToken, type OfferingOption } from "./mint-token";
 import { RevokeToken } from "./revoke-token";
 
 /**
  * Presentational tokens view (pure; no I/O). Lists PAT METADATA only — public
- * id, name, status, timestamps, scope count. The raw secret is never present
- * here; it is only ever shown once by {@link MintToken} at mint time. Extracted
+ * id, name, status, timestamps, and scope names. The raw secret is never present
+ * here; it is only ever shown once by {@link MintToken} at mint time. Scope ids
+ * are pre-resolved to client-safe "Display name (alias)" labels by the server;
+ * an unresolved id renders as a neutral fallback (never the raw uuid). Extracted
  * so it can be unit-tested with injected props (no DB / no session).
  */
 function formatDate(value?: Date): string {
@@ -16,8 +18,12 @@ function formatDate(value?: Date): string {
 
 export function TokensView({
   tokens,
+  offerings,
+  scopeLabels,
 }: {
   readonly tokens: readonly PatRecord[];
+  readonly offerings: readonly OfferingOption[];
+  readonly scopeLabels: ReadonlyMap<string, string>;
 }) {
   return (
     <main id="main">
@@ -34,7 +40,7 @@ export function TokensView({
         <div className="section-heading">
           <h2 id="mint-heading">Mint a token</h2>
         </div>
-        <MintToken />
+        <MintToken offerings={offerings} />
       </section>
 
       <section aria-labelledby="tokens-heading">
@@ -69,9 +75,17 @@ export function TokensView({
                   <td>{formatDate(token.createdAt)}</td>
                   <td>{formatDate(token.expiresAt)}</td>
                   <td>
-                    {token.scopes.length === 0
-                      ? "All entitled"
-                      : token.scopes.length}
+                    {token.scopes.length === 0 ? (
+                      "All entitled"
+                    ) : (
+                      <ul className="scope-list">
+                        {token.scopes.map((scopeId) => (
+                          <li key={scopeId}>
+                            {scopeLabels.get(scopeId) ?? "Restricted offering"}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </td>
                   <td>
                     {token.status === "active" ? (

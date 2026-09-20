@@ -8,6 +8,7 @@ import {
   createPersonalAccessToken,
   revokePersonalAccessToken,
 } from "../../lib/pat";
+import { resolveScopableOfferings } from "../../lib/pat-scopes";
 
 /**
  * PAT server actions (CLAUDE.md rule 2 / web-control-plane PAT hygiene).
@@ -61,10 +62,62 @@ export async function mintTokenAction(formData: FormData): Promise<MintResult> {
     expiresAt = parsed;
   }
 
+  // Scope is an EXPLICIT choice. An omitted / unknown mode fails closed rather
+  // than silently minting an unscoped (full-entitlement) token. "all" = unscoped
+  // (inherits the caller's full entitlement at request time); "selected" =
+  // narrow to the chosen offerings, which must be BOTH published AND entitled.
+  const scopeMode = formData.get("scopeMode");
+  let scopeCatalogueEntryIds: readonly string[] | undefined;
+  if (scopeMode === "all") {
+    scopeCatalogueEntryIds = undefined;
+  } else if (scopeMode === "selected") {
+    const selectedAliases = formData
+      .getAll("scopeAlias")
+      .filter((value): value is string => typeof value === "string");
+    if (selectedAliases.length === 0) {
+      return {
+        ok: false,
+        message:
+          "Select at least one offering to scope to, or choose all entitled offerings.",
+      };
+    }
+    let scopable: readonly { catalogueEntryId: string; publicAlias: string }[];
+    try {
+      scopable = await resolveScopableOfferings();
+    } catch (error) {
+      if (error instanceof AuthzError) {
+        return { ok: false, message: authMessage(error.reason) };
+      }
+      throw error;
+    }
+    // Re-resolve alias → immutable scope id against the caller's live
+    // published+entitled set. A submitted alias not in that set (unknown,
+    // unpublished, or not entitled) is REJECTED — a client can never forge a
+    // scope for an offering it may not use.
+    const aliasToId = new Map(
+      scopable.map((offering) => [offering.publicAlias, offering.catalogueEntryId]),
+    );
+    const ids = new Set<string>();
+    for (const alias of selectedAliases) {
+      const id = aliasToId.get(alias);
+      if (!id) {
+        return {
+          ok: false,
+          message: "One or more selected offerings are not available to you.",
+        };
+      }
+      ids.add(id);
+    }
+    scopeCatalogueEntryIds = [...ids];
+  } else {
+    return { ok: false, message: "Choose how to scope this token." };
+  }
+
   try {
     const minted = await createPersonalAccessToken({
       name,
       ...(expiresAt ? { expiresAt } : {}),
+      ...(scopeCatalogueEntryIds !== undefined ? { scopeCatalogueEntryIds } : {}),
     });
     revalidatePath("/account/tokens");
     // The raw token crosses the wire once, to be shown once; it is not stored.

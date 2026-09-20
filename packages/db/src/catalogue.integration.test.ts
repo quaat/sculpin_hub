@@ -189,6 +189,40 @@ suite("catalogue repository", () => {
     expect(missing).toBeUndefined();
   });
 
+  it("summarizes entries by id (client-safe: never the upstream agent id) and returns [] for none", async () => {
+    // `sculpin-pro` is published, `sculpin-fast` is a draft — both resolve as
+    // summaries by id regardless of status (the caller filters by status).
+    const proId = (await repository.resolvePublishedAlias("sculpin-pro"))
+      ?.catalogueEntryId;
+    expect(proId).toBeDefined();
+    const all = await repository.listAll();
+    const fast = all.find((e) => e.publicAlias === "sculpin-fast");
+    expect(fast?.status).toBe("draft");
+
+    const summaries = await repository.listSummariesByIds([proId!, fast!.id]);
+    const byAlias = new Map(summaries.map((s) => [s.publicAlias, s]));
+    expect(byAlias.get("sculpin-pro")?.status).toBe("published");
+    expect(byAlias.get("sculpin-fast")?.status).toBe("draft");
+    expect(byAlias.get("sculpin-pro")?.displayName).toBe("Sculpin Pro");
+    // Client-safe: no upstream agent id is ever present on the summary.
+    for (const summary of summaries) {
+      expect(Object.keys(summary).sort()).toEqual([
+        "catalogueEntryId",
+        "displayName",
+        "publicAlias",
+        "status",
+      ]);
+    }
+    expect(JSON.stringify(summaries)).not.toMatch(/internal-agent/);
+
+    expect(await repository.listSummariesByIds([])).toEqual([]);
+    expect(
+      await repository.listSummariesByIds([
+        "00000000-0000-4000-8000-000000000000",
+      ]),
+    ).toEqual([]);
+  });
+
   it("rejects a duplicate public alias with a domain conflict", async () => {
     await expect(
       repository.create(

@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
 import { listPersonalAccessTokens } from "../../lib/pat";
+import {
+  resolveScopableOfferings,
+  resolveScopeLabels,
+} from "../../lib/pat-scopes";
 import { guard, isUnauthenticated } from "../../lib/authz-guard";
 import { SignInControls } from "../../dashboard/auth-controls";
 import { TokensView } from "./tokens-view";
@@ -35,5 +39,30 @@ export default async function TokensPage() {
     );
   }
 
-  return <TokensView tokens={result.value} />;
+  const tokens = result.value;
+
+  // Both reads are best-effort enrichment: the scope selector and the scope
+  // labels degrade to empty (never an error page) if entitlement/catalogue
+  // resolution hiccups, since the token list itself already succeeded.
+  const offeringsResult = await guard(() => resolveScopableOfferings());
+  const offerings = offeringsResult.ok
+    ? offeringsResult.value.map((offering) => ({
+        publicAlias: offering.publicAlias,
+        displayName: offering.displayName,
+      }))
+    : [];
+
+  const scopeIds = [...new Set(tokens.flatMap((token) => token.scopes))];
+  const labelsResult = await guard(() => resolveScopeLabels(scopeIds));
+  const scopeLabels = labelsResult.ok
+    ? labelsResult.value
+    : new Map<string, string>();
+
+  return (
+    <TokensView
+      tokens={tokens}
+      offerings={offerings}
+      scopeLabels={scopeLabels}
+    />
+  );
 }

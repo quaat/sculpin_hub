@@ -6,6 +6,7 @@ import {
   type CatalogueEntryInput,
   type CatalogueEntryMetadataPatch,
   type CatalogueEntryStatus,
+  type CatalogueOfferingSummary,
   type CatalogueRepository,
   type PublicModel,
 } from "@sculpin/domain";
@@ -192,6 +193,31 @@ export class PostgresCatalogueRepository implements CatalogueRepository {
       id: row.publicAlias,
       catalogueEntryId: row.catalogueEntryId,
       created: Math.floor(row.createdAt.getTime() / 1000),
+    }));
+  }
+
+  async listSummariesByIds(
+    ids: readonly string[],
+  ): Promise<readonly CatalogueOfferingSummary[]> {
+    if (ids.length === 0) return [];
+    // Deliberately does NOT select upstream_agent_id: the summary is client-safe.
+    // `= ANY($1::uuid[])` is fully parameterized (no interpolation); a malformed
+    // id would surface as a cast error rather than being trusted.
+    const result = await this.pool.query<{
+      catalogueEntryId: string;
+      publicAlias: string;
+      displayName: string;
+      status: CatalogueEntryStatus;
+    }>(
+      `SELECT id AS "catalogueEntryId", public_alias AS "publicAlias", display_name AS "displayName", status
+       FROM catalogue_entries WHERE id = ANY($1::uuid[]) ORDER BY public_alias`,
+      [[...ids]],
+    );
+    return result.rows.map((row) => ({
+      catalogueEntryId: row.catalogueEntryId,
+      publicAlias: row.publicAlias,
+      displayName: row.displayName,
+      status: row.status,
     }));
   }
 

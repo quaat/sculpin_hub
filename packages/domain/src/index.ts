@@ -249,6 +249,21 @@ export interface CatalogueEntryMetadataPatch {
   readonly accessInstructions?: string | null;
 }
 
+/**
+ * Client-safe summary of a catalogue entry used by the PAT scope UI: the public
+ * alias (an OpenAI model id, already public), a human display name, and the
+ * status. It deliberately carries NO `upstreamAgentId`. `catalogueEntryId` is the
+ * internal row id — it stays SERVER-SIDE (used to translate a caller's alias
+ * selection into the immutable scope id and to label a stored scope) and is never
+ * required to be rendered to the browser.
+ */
+export interface CatalogueOfferingSummary {
+  readonly catalogueEntryId: string;
+  readonly publicAlias: string;
+  readonly displayName: string;
+  readonly status: CatalogueEntryStatus;
+}
+
 const catalogueAliasPattern = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const controlCharPattern = /[\p{Cc}\p{Cf}]/u;
 const ACCESS_INSTRUCTIONS_MAX = 4096;
@@ -369,6 +384,15 @@ export interface CatalogueRepository {
   ): Promise<CatalogueEntry | undefined>;
   listAll(): Promise<readonly CatalogueEntry[]>;
   listPublished(): Promise<readonly PublicModel[]>;
+  /**
+   * Client-safe summaries for the given catalogue-entry ids (never the upstream
+   * agent id). Used by the PAT scope UI to (a) offer the caller's published +
+   * entitled offerings by name and (b) label a token's stored scopes. Ids that do
+   * not exist are simply absent from the result; an empty id list returns `[]`.
+   */
+  listSummariesByIds(
+    ids: readonly string[],
+  ): Promise<readonly CatalogueOfferingSummary[]>;
   resolvePublishedAlias(alias: string): Promise<{ catalogueEntryId: string; upstreamAgentId: string } | undefined>;
 }
 
