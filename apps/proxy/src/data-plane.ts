@@ -224,13 +224,28 @@ function handleChatCompletions(services: DataPlaneServices) {
     // pass through so sampling controls still reach Sculpin.
     const upstreamPayload = { ...parsed.data, model: resolved.upstreamAgentId };
     // S10 cancellation + bounded time-to-first-headers. One AbortController does
-    // double duty: client disconnect aborts the upstream run, and a bounded
-    // timer aborts a hung upstream that never returns response headers. The
-    // timer is DISARMED the moment headers arrive, so legitimately long SSE
+    // double duty: a genuine client disconnect aborts the upstream run, and a
+    // bounded timer aborts a hung upstream that never returns response headers.
+    // The timer is DISARMED the moment headers arrive, so legitimately long SSE
     // streams are never cut off afterwards.
+    //
+    // Fastify 5.5 does not expose `request.signal`. `request.raw`'s `close`
+    // fires as soon as the request BODY is consumed (well before any client
+    // disconnect), so it is NOT a disconnect signal. The reliable signal is the
+    // RESPONSE socket closing before the response finished flushing: a
+    // `reply.raw` `close` with `writableFinished === false` is a genuine client
+    // abort; a `close` with `writableFinished === true` is normal completion and
+    // must NOT abort the upstream. `clientGone` then suppresses a synthetic
+    // error body written to a socket that is already gone.
     const controller = new AbortController();
-    request.raw.on("close", () => controller.abort());
+    let clientGone = false;
     let timedOut = false;
+    const onClose = () => {
+      if (reply.raw.writableFinished) return; // normal completion
+      clientGone = true;
+      controller.abort();
+    };
+    reply.raw.on("close", onClose);
     const timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
@@ -243,13 +258,27 @@ function handleChatCompletions(services: DataPlaneServices) {
       );
     } catch {
       clearTimeout(timer);
-      // Never leak the internal URL, the key, or the underlying error. A timeout
-      // is a distinct 504; any other failure (incl. client disconnect) is 502.
+      // The client vanished mid-flight: the socket is gone, so do NOT synthesize
+      // a response body (there is nothing to write it to). Otherwise never leak
+      // the internal URL, the key, or the underlying error — a header timeout is
+      // a distinct 504; any other failure is a sanitized 502.
+      if (clientGone) return reply;
       if (timedOut) return reply.code(504).send(upstreamTimeoutError());
       return reply.code(502).send(upstreamUnavailableError());
     }
     clearTimeout(timer); // headers received — disarm so streaming is not aborted
-    reply.code(upstreamResponse.status);
+    // S7 fail closed: a non-2xx upstream response is NEVER relayed. Its status
+    // line and body can carry the internal URL, the upstream agent id, a stack
+    // trace, a database error, the upstream credential, or a vendor banner —
+    // none may reach the client. Drain/cancel the body and return a single
+    // sanitized OpenAI-shaped gateway error.
+    if (!upstreamResponse.ok) {
+      await upstreamResponse.body?.cancel().catch(() => undefined);
+      return reply.code(502).send(upstreamUnavailableError());
+    }
+    // Success (2xx). Normalize the status (chat completions is always 200) and
+    // relay only the caller-safe response-header allowlist.
+    reply.code(200);
     for (const [name, value] of Object.entries(
       forwardableResponseHeaders(upstreamResponse.headers),
     ))
@@ -262,16 +291,23 @@ function handleChatCompletions(services: DataPlaneServices) {
     if (contentType.includes("text/event-stream")) {
       // SSE: incremental transform preserving framing/ordering/backpressure and
       // rewriting ONLY the `model` field inside JSON `data:` events. Never buffer
-      // the whole stream — events are forwarded as they arrive.
-      const rewritten = (
-        upstreamResponse.body as WebReadableStream<Uint8Array>
-      ).pipeThrough(createSseModelRewriteStream(parsed.data.model));
-      return reply.send(Readable.fromWeb(rewritten));
+      // the whole stream — events are forwarded as they arrive. Pipe manually so
+      // the transform's fail-closed `terminate()` (which errors the writable and
+      // cancels the upstream body) cannot surface as an unhandled rejection.
+      const transform = createSseModelRewriteStream(parsed.data.model);
+      void (upstreamResponse.body as WebReadableStream<Uint8Array>)
+        .pipeTo(transform.writable)
+        .catch(() => undefined);
+      return reply.send(Readable.fromWeb(transform.readable));
     }
     // Non-streaming JSON: the body is small/bounded, so buffering to rewrite the
-    // `model` field is fine (the never-buffer rule applies only to SSE).
+    // `model` field is fine (the never-buffer rule applies only to SSE). Fail
+    // closed if the body is not a well-formed JSON object — never relay an
+    // unparseable/mis-shaped upstream body.
     const text = await upstreamResponse.text();
-    return reply.send(rewriteModelInJsonBody(text, parsed.data.model));
+    const rewritten = rewriteModelInJsonBody(text, parsed.data.model);
+    if (!rewritten.ok) return reply.code(502).send(upstreamUnavailableError());
+    return reply.send(rewritten.body);
   };
 }
 

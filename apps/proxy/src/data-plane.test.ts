@@ -586,6 +586,99 @@ describe("POST /v1/chat/completions", () => {
     await server.close();
   });
 
+  it("sanitizes a non-2xx upstream response: 502, no status/body/canary leak", async () => {
+    // A hostile/broken upstream error body packed with everything that must
+    // never reach a client.
+    const canaries = {
+      url: "http://internal-sculpin:8001",
+      agent: "agent-uuid-123",
+      key: "sk-upstream-secret-xyz",
+      trace: "Traceback (most recent call last): File app.py",
+      db: 'relation "subscriptions" does not exist',
+    };
+    const leakyBody = JSON.stringify({
+      detail: `${canaries.trace} ${canaries.db}`,
+      upstream_url: canaries.url,
+      model: canaries.agent,
+      api_key: canaries.key,
+      exodus: { conversation_id: "internal-conv" },
+    });
+    const chatCompletions = vi.fn<ChatCompletions>().mockResolvedValue(
+      new Response(leakyBody, {
+        status: 500,
+        headers: { "content-type": "application/json", server: "uvicorn" },
+      }),
+    );
+    const server = serverWith(services({ upstream: { chatCompletions } }));
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: auth,
+      payload: body,
+    });
+    // Fail closed: the upstream 500 is mapped to a single sanitized 502.
+    expect(response.statusCode).toBe(502);
+    expect(errorCode(response.json())).toBe("upstream_unavailable");
+    for (const canary of Object.values(canaries))
+      expect(response.body).not.toContain(canary);
+    expect(response.body).not.toContain("internal-conv");
+    expect(response.body).not.toContain("exodus");
+    expect(response.headers.server).toBeUndefined();
+    await server.close();
+  });
+
+  it("fails closed with 502 when a 2xx upstream body is not a JSON object", async () => {
+    const chatCompletions = vi.fn<ChatCompletions>().mockResolvedValue(
+      // A 200 with a mis-shaped body (HTML error page smuggling an internal id).
+      new Response("<html>agent-uuid-123 internal-sculpin:8001</html>", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const server = serverWith(services({ upstream: { chatCompletions } }));
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: auth,
+      payload: body,
+    });
+    expect(response.statusCode).toBe(502);
+    expect(errorCode(response.json())).toBe("upstream_unavailable");
+    expect(response.body).not.toContain("agent-uuid-123");
+    expect(response.body).not.toContain("internal-sculpin");
+    await server.close();
+  });
+
+  it("fails closed mid-SSE on a malformed data event (sanitized error + DONE, no leak)", async () => {
+    const frames = [
+      'data: {"id":"c","object":"chat.completion.chunk","model":"agent-uuid-123","choices":[{"index":0,"delta":{"content":"hi"}}]}\n\n',
+      // Malformed JSON payload that smuggles the internal id + internal URL.
+      'data: {"model":"agent-uuid-123","url":"http://internal-sculpin:8001", broken\n\n',
+      'data: {"id":"c","model":"agent-uuid-123","choices":[]}\n\n',
+      "data: [DONE]\n\n",
+    ];
+    const chatCompletions = vi
+      .fn<ChatCompletions>()
+      .mockResolvedValue(sseResponse(frames));
+    const server = serverWith(services({ upstream: { chatCompletions } }));
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { ...auth, "content-type": "application/json" },
+      payload: { ...body, stream: true },
+    });
+    expect(response.statusCode).toBe(200);
+    // The first valid chunk is delivered with the alias; then the transform
+    // fails closed. No internal id or URL ever reaches the client.
+    expect(response.body).toContain('"model":"support"');
+    expect(response.body).not.toContain("agent-uuid-123");
+    expect(response.body).not.toContain("internal-sculpin");
+    expect(response.body).not.toContain("broken");
+    expect(response.body).toContain("upstream_unavailable");
+    expect(response.body.trimEnd().endsWith("data: [DONE]")).toBe(true);
+    await server.close();
+  });
+
   it("returns 502 without leaking details when the upstream call fails", async () => {
     const chatCompletions = vi
       .fn<ChatCompletions>()

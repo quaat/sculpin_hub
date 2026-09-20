@@ -4,37 +4,50 @@ import {
   rewriteModelInJsonBody,
 } from "./rewrite.js";
 
+function okBody(body: string, alias: string): string {
+  const result = rewriteModelInJsonBody(body, alias);
+  if (!result.ok) throw new Error("expected ok rewrite");
+  return result.body;
+}
+
 describe("rewriteModelInJsonBody", () => {
   it("rewrites a top-level string model to the public alias", () => {
     const body = JSON.stringify({ id: "x", model: "agent-uuid", object: "o" });
-    const out = rewriteModelInJsonBody(body, "support");
-    expect(JSON.parse(out)).toEqual({ id: "x", model: "support", object: "o" });
-  });
-
-  it("leaves a body with no model field unchanged", () => {
-    const body = JSON.stringify({ id: "x", object: "o" });
-    expect(rewriteModelInJsonBody(body, "support")).toBe(body);
-  });
-
-  it("leaves invalid JSON unchanged (verbatim)", () => {
-    const body = "not json at all {";
-    expect(rewriteModelInJsonBody(body, "support")).toBe(body);
-  });
-
-  it("leaves a JSON array or primitive unchanged", () => {
-    const array = JSON.stringify([{ model: "agent-uuid" }]);
-    expect(rewriteModelInJsonBody(array, "support")).toBe(array);
-    const primitive = JSON.stringify("agent-uuid");
-    expect(rewriteModelInJsonBody(primitive, "support")).toBe(primitive);
-  });
-
-  it("leaves a non-string model unchanged", () => {
-    const body = JSON.stringify({ id: "x", model: 42 });
-    // A non-string model is preserved, but the object is still re-serialized.
-    expect(JSON.parse(rewriteModelInJsonBody(body, "support"))).toEqual({
+    expect(JSON.parse(okBody(body, "support"))).toEqual({
       id: "x",
-      model: 42,
+      model: "support",
+      object: "o",
     });
+  });
+
+  it("leaves a body with no model field unchanged (still ok)", () => {
+    const body = JSON.stringify({ id: "x", object: "o" });
+    expect(JSON.parse(okBody(body, "support"))).toEqual({
+      id: "x",
+      object: "o",
+    });
+  });
+
+  it("fails closed on invalid JSON (never relayed verbatim)", () => {
+    expect(rewriteModelInJsonBody("not json at all {", "support")).toEqual({
+      ok: false,
+    });
+  });
+
+  it("fails closed on a JSON array or primitive", () => {
+    // A well-formed chat completion is always a JSON object; anything else is a
+    // gateway anomaly and must not be relayed.
+    expect(
+      rewriteModelInJsonBody(JSON.stringify([{ model: "agent-uuid" }]), "support"),
+    ).toEqual({ ok: false });
+    expect(
+      rewriteModelInJsonBody(JSON.stringify("agent-uuid"), "support"),
+    ).toEqual({ ok: false });
+  });
+
+  it("leaves a non-string model unchanged (object still re-serialized)", () => {
+    const body = JSON.stringify({ id: "x", model: 42 });
+    expect(JSON.parse(okBody(body, "support"))).toEqual({ id: "x", model: 42 });
   });
 
   it("strips a top-level exodus block while rewriting the model", () => {
@@ -43,9 +56,8 @@ describe("rewriteModelInJsonBody", () => {
       model: "agent-uuid",
       exodus: { conversation_id: "internal" },
     });
-    const out = rewriteModelInJsonBody(body, "support");
-    const parsed = JSON.parse(out) as Record<string, unknown>;
-    expect(parsed).toEqual({ id: "x", model: "support" });
+    const out = okBody(body, "support");
+    expect(JSON.parse(out)).toEqual({ id: "x", model: "support" });
     expect(out).not.toContain("exodus");
     expect(out).not.toContain("internal");
   });
@@ -55,7 +67,7 @@ describe("rewriteModelInJsonBody", () => {
       id: "x",
       exodus: { conversation_id: "internal" },
     });
-    const out = rewriteModelInJsonBody(body, "support");
+    const out = okBody(body, "support");
     expect(JSON.parse(out)).toEqual({ id: "x" });
     expect(out).not.toContain("exodus");
   });
@@ -120,6 +132,42 @@ describe("createSseModelRewriteStream", () => {
     expect(out).toBe("data: [DONE]\n\n");
   });
 
+  it("emits a completed event BEFORE the final event is written (incremental, no whole-stream buffering)", async () => {
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    const ts = createSseModelRewriteStream("support");
+    const writer = ts.writable.getWriter();
+    const reader = ts.readable.getReader();
+    // Write only the FIRST frame, then read it back — proving the transform does
+    // not wait for the terminal frame before emitting completed events. The
+    // write is not awaited before the read because a web TransformStream applies
+    // backpressure (HWM) until the reader pulls; the pull below relieves it.
+    const firstWrite = writer.write(
+      enc.encode(`data: {"seq":1,"model":"agent-uuid"}\n\n`),
+    );
+    const first = await reader.read();
+    await firstWrite;
+    expect(first.done).toBe(false);
+    const firstText = dec.decode(first.value);
+    expect(firstText).toContain(`"seq":1`);
+    expect(firstText).toContain(`"model":"support"`);
+    expect(firstText).not.toContain("agent-uuid");
+    // Only now is the final frame written and the stream closed. Drain the
+    // reader concurrently so backpressure (HWM) on these writes is relieved.
+    const writeRest = (async () => {
+      await writer.write(enc.encode("data: [DONE]\n\n"));
+      await writer.close();
+    })();
+    let rest = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      rest += dec.decode(value, { stream: true });
+    }
+    await writeRest;
+    expect(rest).toContain("data: [DONE]");
+  });
+
   it("rewrites an event split across two chunks and emits it once", async () => {
     const first = `data: {"id":"c","model":"agent-`;
     const second = `uuid","choices":[]}\n\n`;
@@ -147,5 +195,60 @@ describe("createSseModelRewriteStream", () => {
     expect(keep).toBeLessThan(seq2);
     expect(seq2).toBeLessThan(done);
     expect(out).not.toContain("agent-uuid");
+  });
+
+  it("parses CRLF (\\r\\n\\r\\n) event framing that Sculpin may emit", async () => {
+    const chunks = [
+      `data: {"id":"c","model":"agent-uuid","choices":[]}\r\n\r\n`,
+      ": keep-alive\r\n\r\n",
+      "data: [DONE]\r\n\r\n",
+    ];
+    const out = await runSse("support", chunks);
+    expect(out).toContain(`"model":"support"`);
+    expect(out).not.toContain("agent-uuid");
+    expect(out).toContain("data: [DONE]");
+    // The keepalive comment frame survives (its text is preserved).
+    expect(out).toContain(": keep-alive");
+  });
+
+  it("parses a CRLF boundary split across two chunks", async () => {
+    const chunks = [
+      `data: {"id":"c","model":"agent-uuid","choices":[]}\r\n`,
+      `\r\ndata: [DONE]\r\n\r\n`,
+    ];
+    const out = await runSse("support", chunks);
+    expect(out).toContain(`"model":"support"`);
+    expect(out).not.toContain("agent-uuid");
+    expect(out).toContain("data: [DONE]");
+  });
+
+  it("fails closed on a malformed data event: sanitized error + DONE, no leak", async () => {
+    const chunks = [
+      // A first valid frame is forwarded, THEN a malformed data payload that
+      // could smuggle an internal id must NOT be forwarded verbatim.
+      `data: {"id":"c","model":"agent-uuid","choices":[]}\n\n`,
+      `data: {"model":"agent-uuid-LEAK", broken json :(\n\n`,
+      `data: {"id":"c2","model":"agent-uuid","choices":[]}\n\n`,
+      "data: [DONE]\n\n",
+    ];
+    const out = await runSse("support", chunks);
+    // First valid frame passed through with the alias.
+    expect(out).toContain(`"model":"support"`);
+    // The malformed frame (and everything after it) never reaches the client.
+    expect(out).not.toContain("agent-uuid");
+    expect(out).not.toContain("LEAK");
+    expect(out).not.toContain("broken json");
+    expect(out).not.toContain(`"id":"c2"`);
+    // A sanitized OpenAI-shaped error is emitted, then the stream terminates.
+    expect(out).toContain("upstream_unavailable");
+    expect(out.trimEnd().endsWith("data: [DONE]")).toBe(true);
+  });
+
+  it("fails closed on a data event that is a JSON array (not an object)", async () => {
+    const chunks = [`data: [1,2,3]\n\n`, "data: [DONE]\n\n"];
+    const out = await runSse("support", chunks);
+    expect(out).not.toContain("[1,2,3]");
+    expect(out).toContain("upstream_unavailable");
+    expect(out.trimEnd().endsWith("data: [DONE]")).toBe(true);
   });
 });
