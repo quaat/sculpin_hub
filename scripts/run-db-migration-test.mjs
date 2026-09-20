@@ -133,6 +133,34 @@ try {
       "INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, available_at, claim_owner) VALUES ('organization','00000000-0000-4000-8000-000000000201','x.y',2,'{}',now(),now(),'worker')",
       { code: "23514" },
     );
+    // S3 plan domain (D-019): the seeded free-trial plan exists, the one-time
+    // claim ledger rejects a duplicate claim (23505), and the subscription
+    // status enum now includes 'suspended'.
+    const seededPlan = await test.query(
+      "SELECT id, kind, one_time_per_organization FROM plans WHERE key='free-trial'",
+    );
+    if (seededPlan.rowCount !== 1)
+      throw new Error("Expected the seeded free-trial plan to exist.");
+    if (seededPlan.rows[0].kind !== "free_trial")
+      throw new Error("Seeded free-trial plan has the wrong kind.");
+    if (seededPlan.rows[0].one_time_per_organization !== true)
+      throw new Error("Seeded free-trial plan must be one-time-per-organization.");
+    const freeTrialPlanId = seededPlan.rows[0].id;
+    await test.query(
+      "INSERT INTO plan_claims (organization_id, plan_id) VALUES ('00000000-0000-4000-8000-000000000101',$1)",
+      [freeTrialPlanId],
+    );
+    await expectSqlFailure(
+      test,
+      `INSERT INTO plan_claims (organization_id, plan_id) VALUES ('00000000-0000-4000-8000-000000000101','${freeTrialPlanId}')`,
+      { code: "23505" },
+    );
+    const suspendedValue = await test.query(
+      "SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname='subscription_status' AND e.enumlabel='suspended'",
+    );
+    if (suspendedValue.rowCount !== 1)
+      throw new Error("subscription_status enum must include 'suspended'.");
+
     const indexes = await test.query(
       "SELECT indexname FROM pg_indexes WHERE tablename IN ('organizations','outbox_events')",
     );

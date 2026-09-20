@@ -193,12 +193,14 @@ with NO payment provider ([[D-004]]).
    treats a subscription as active when `status = 'active'` AND in its validity window
    (`ends_at` future or NULL); `remainingQuota` is the pooled unused budget across those.
 
-4. **Trial on provisioning (fail-closed authz).** Every personal tenant is granted an `active`
-   `trial` (`TRIAL_REQUEST_QUOTA = 200`) inside the SAME provisioning transaction (both the web
-   Prisma path `provisionPersonalTenant` and the pg `PostgresPersonalTenantTransaction`), so a
-   valid session/PAT alone does NOT entitle `/v1/*` — `requireEntitledOrganization`
-   (`apps/web/app/lib/entitlement.ts`) additionally requires an active, in-quota entitlement,
-   throwing stable `AuthzError` reasons (`no_active_subscription`/`quota_exhausted`).
+4. **Trial on provisioning (fail-closed authz).** _Superseded in part by [[D-019]]:_ auto-granting
+   a trial at provisioning is removed in favour of an EXPLICIT plan-claim journey (a provisioned
+   tenant now has NO subscription until it claims a plan). The rest of this item still holds — a
+   valid session/PAT alone does NOT entitle `/v1/*`; `requireEntitledOrganization`
+   (`apps/web/app/lib/entitlement.ts`) requires an active, in-quota entitlement, throwing stable
+   `AuthzError` reasons (`no_active_subscription`/`quota_exhausted`). Originally: every personal
+   tenant was granted an `active` `trial` (`TRIAL_REQUEST_QUOTA = 200`) inside the SAME provisioning
+   transaction (web Prisma `provisionPersonalTenant` + pg `PostgresPersonalTenantTransaction`).
 
 5. **Atomic quota reservation (CLAUDE.md rule 6).** `reserveQuota` is a single conditional UPDATE
    whose target row is selected + row-locked (`FOR UPDATE`, no `SKIP LOCKED`) by a subquery
@@ -340,6 +342,60 @@ readiness remain M9. This harness is the cross-milestone functional down-payment
 **Verification:** `test:e2e` → **6/6** green (stock OpenAI SDK, ephemeral PG, fake Sculpin); the suite
 is skipped and offline under the normal proxy unit run (47 pass, 6 skipped); proxy typecheck + lint
 clean. **By:** Stage F implementation pass.
+
+## D-019 — S3 plan domain + explicit subscription claim (supersedes trial-on-provisioning)
+
+**Decision (2026-09-20):** Replace the thin M4 subscription slice with an admin-configurable plan
+domain and an EXPLICIT subscription-claim journey. Full rationale, snapshot semantics, and the
+enum-swap migration are recorded in [`ADR 008`](adr/008-plan-domain-and-explicit-subscription.md);
+this supersedes the trial-on-provisioning slice of [[D-015]] (its union-entitlement + atomic-quota
+mechanics still hold).
+
+1. **`Plan` model** (`plans`, migration `20260920180000_plan_domain`): admin-owned product with
+   `key` (unique slug), `name`, `description?`, `kind` (`free_trial`/`commercial_monthly`/
+   `commercial_annual`), `enabled`, `published`, `self_service_eligible`, `admin_grantable`,
+   `duration_days?`, `request_quota`, `one_time_per_organization`, `created_by`/`updated_by`,
+   `version`. Column CHECKs mirror the pure `validatePlanInput` guard.
+
+2. **Authoritative mapping.** `plan_catalogue_entries` (M2M, `catalogue_entry_id` `ON DELETE
+   RESTRICT`) is the admin-configured set of Sculpin agents a plan grants.
+
+3. **Snapshot at grant.** `SubscriptionRepository.grantFromPlan` materializes a subscription in one
+   transaction and SNAPSHOTS the plan's `kind` (`subscriptions.plan_kind`) and its current
+   catalogue-entry set (`subscription_catalogue_entries`, copied from `plan_catalogue_entries`).
+   Later plan edits NEVER change an existing subscription's frozen offerings.
+
+4. **Explicit claim (no auto-trial).** Provisioning grants NO subscription; both atomic paths
+   (`PostgresPersonalTenantTransaction`, `provisionPersonalTenant`) still commit
+   user+identity+org+membership+audit+outbox in one COMMIT ([[D-011]]) with the
+   `personal_organization.created` outbox trigger intact, but write no `subscriptions` row. A seeded
+   `free-trial` plan (fixed uuid, quota 200, one-time, published + self-service) is the default claim
+   target; its offerings are attached by admins later.
+
+5. **One-time invariant.** `plan_claims (organization_id, plan_id)` PK; for a
+   `one_time_per_organization` plan a claim row is inserted in the SAME transaction as the
+   subscription, so a second claim raises `23505` → `DomainConflictError("plan_already_claimed")`.
+   Non-one-time plans write no claim row and may be subscribed repeatedly.
+
+6. **Suspended state.** `subscription_status` gains `suspended`; the state machine is
+   `active → {suspended, canceled, expired}`, `suspended → {active, canceled, expired}`, terminals
+   dead. `suspended` is NOT entitling (`isSubscriptionActive` stays `active`-only). Enforced in the
+   domain transition table and in SQL `setStatus`.
+
+7. **Entitlement seam.** `resolveEntitlement` now returns
+   `{ active, planKeys, remainingQuota, entitledCatalogueEntryIds }`, the last being the sorted union
+   of active subscriptions' snapshot offerings — the composable seam a later milestone intersects with
+   the published catalogue + PAT scopes. Atomic `reserveQuota` is unchanged from [[D-015]].
+
+**Scope (deferred):** the claim/admin UI (Stage G); the data-plane intersection of
+`entitledCatalogueEntryIds` with catalogue + PAT scopes; subscription outbox events; no payment
+provider ([[D-004]]).
+
+**Verification:** all-package typecheck + lint clean; domain unit 86, web entitlement 7, proxy 12;
+`prisma validate` + format clean; `db:migration:test` drift-free with new plan/`plan_claims`/
+`suspended` invariant assertions; DB integration 46 incl. the new `plan.integration.test.ts` (6) and
+reworked `subscription.integration.test.ts` (8). An independent security review of this slice is
+required before sign-off. **By:** S3 implementation pass.
 
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 

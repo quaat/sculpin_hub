@@ -59,7 +59,8 @@ export class DomainConflictError extends Error {
     readonly code:
       | "identity_conflict"
       | "organization_slug_conflict"
-      | "catalogue_alias_conflict",
+      | "catalogue_alias_conflict"
+      | "plan_already_claimed",
   ) {
     super(code);
   }
@@ -285,46 +286,145 @@ export interface CatalogueRepository {
 }
 
 // ---------------------------------------------------------------------------
-// M4 — Subscriptions & entitlements (NO payment provider; D-004)
+// M4 — Plans, subscriptions & entitlements (NO payment provider; D-004/D-019)
 //
-// Every tenant gets a `trial` subscription at provisioning so that having a
-// valid PAT/session is NOT by itself sufficient to call `/v1/*` — access is
-// gated on an ACTIVE, in-quota entitlement (D-015). An entitlement is the UNION
-// of a tenant's active subscriptions: a subscription counts when its status is
-// `active` and it is within its validity window (`endsAt` in the future or
-// open-ended). There is no payment provider in v1; `commercial` subscriptions
-// are provisioned administratively. Quota reservation MUST be atomic (a single
-// conditional UPDATE, never read-compare-write) so concurrent last-quota
-// attempts cannot over-draw (CLAUDE.md rule 6) — the repository owns that SQL;
-// the pure helpers here (`resolveEntitlement`, the state machine) stay
-// deterministic and side-effect free for unit testing.
+// A `Plan` is an admin-configurable product (free trial, commercial monthly,
+// commercial annual). Its `plan_catalogue_entries` M2M is the AUTHORITATIVE set
+// of Sculpin agents the plan grants. A tenant obtains access by EXPLICITLY
+// claiming a plan (`grantFromPlan`), which materializes a `Subscription` and, at
+// grant time, SNAPSHOTS the plan's kind and its catalogue-entry set onto the
+// subscription. Later plan edits therefore NEVER retroactively change an
+// existing subscription. A newly provisioned tenant has NO subscription until it
+// claims one — a valid credential alone is not sufficient to call `/v1/*`.
+//
+// Entitlement is the UNION of a tenant's active subscriptions: a subscription
+// counts when its status is `active` and it is within its validity window
+// (`endsAt` in the future or open-ended). `suspended` is NOT active/entitling.
+// The entitled catalogue-entry ids are the composable seam a later milestone
+// intersects with the published catalogue + PAT scopes. Quota reservation MUST
+// be atomic (a single conditional UPDATE, never read-compare-write) so
+// concurrent last-quota attempts cannot over-draw (CLAUDE.md rule 6) — the
+// repository owns that SQL; the pure helpers here stay deterministic and
+// side-effect free for unit testing.
 // ---------------------------------------------------------------------------
 
-export type SubscriptionPlan = "trial" | "commercial";
-export type SubscriptionStatus = "active" | "canceled" | "expired";
+export type PlanKind =
+  | "free_trial"
+  | "commercial_monthly"
+  | "commercial_annual";
 
-/** Default request budget granted to a new personal tenant's trial. */
-export const TRIAL_REQUEST_QUOTA = 200;
+const planKinds: readonly PlanKind[] = [
+  "free_trial",
+  "commercial_monthly",
+  "commercial_annual",
+];
+
+export interface Plan {
+  readonly id: string;
+  readonly key: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly kind: PlanKind;
+  readonly enabled: boolean;
+  readonly published: boolean;
+  readonly selfServiceEligible: boolean;
+  readonly adminGrantable: boolean;
+  readonly durationDays?: number;
+  readonly requestQuota: number;
+  readonly oneTimePerOrganization: boolean;
+  readonly version: number;
+  /** Admin-configured catalogue-entry ids this plan grants (authoritative). */
+  readonly catalogueEntryIds: readonly string[];
+}
+
+export interface PlanInput {
+  readonly key: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly kind: PlanKind;
+  readonly selfServiceEligible?: boolean;
+  readonly adminGrantable?: boolean;
+  readonly durationDays?: number;
+  readonly requestQuota: number;
+  readonly oneTimePerOrganization?: boolean;
+}
+
+const planKeyPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+export function validatePlanInput(input: PlanInput): void {
+  if (typeof input.key !== "string" || !planKeyPattern.test(input.key))
+    throw new DomainValidationError(
+      "Plan key must be a 1-63 lower-case DNS-label style slug.",
+    );
+  if (
+    input.name.length < 1 ||
+    input.name.length > 120 ||
+    !displayNamePattern.test(input.name)
+  )
+    throw new DomainValidationError(
+      "Plan name must be non-empty and at most 120 characters.",
+    );
+  if (
+    input.description !== undefined &&
+    (input.description.length > 2048 || controlCharPattern.test(input.description))
+  )
+    throw new DomainValidationError(
+      "Plan description must be at most 2048 characters with no control characters.",
+    );
+  if (!planKinds.includes(input.kind))
+    throw new DomainValidationError("Plan kind is unsupported.");
+  if (
+    !Number.isInteger(input.requestQuota) ||
+    input.requestQuota < 0 ||
+    input.requestQuota > 1_000_000
+  )
+    throw new DomainValidationError(
+      "Plan request quota must be an integer between 0 and 1000000.",
+    );
+  if (
+    input.durationDays !== undefined &&
+    (!Number.isInteger(input.durationDays) ||
+      input.durationDays < 1 ||
+      input.durationDays > 3650)
+  )
+    throw new DomainValidationError(
+      "Plan duration must be an integer number of days between 1 and 3650.",
+    );
+}
+
+export type SubscriptionStatus =
+  | "active"
+  | "suspended"
+  | "canceled"
+  | "expired";
 
 export interface Subscription {
   readonly id: string;
   readonly organizationId: OrganizationId;
-  readonly plan: SubscriptionPlan;
+  readonly planId: string;
+  readonly planKey: string;
+  /** SNAPSHOT of the plan's kind at grant time. */
+  readonly planKind: PlanKind;
   readonly status: SubscriptionStatus;
   readonly quotaLimit: number;
   readonly quotaUsed: number;
   readonly startsAt: Date;
   readonly endsAt?: Date;
+  /** SNAPSHOT of the plan's catalogue-entry ids at grant time. */
+  readonly offerings: readonly string[];
   readonly version: number;
 }
 
-// Subscription state machine. `active` is the only non-terminal state; both
-// `canceled` and `expired` are terminal (a new subscription is created rather
-// than reactivating a dead one). Kept as data so the transition set is auditable.
+// Subscription state machine. `active` and `suspended` are the non-terminal
+// states: an active subscription can be suspended (temporarily not entitling)
+// and resumed, or moved to a terminal state; `canceled`/`expired` are terminal
+// (a new subscription is created rather than reactivating a dead one). Kept as
+// data so the transition set is auditable.
 const subscriptionTransitions: Readonly<
   Record<SubscriptionStatus, readonly SubscriptionStatus[]>
 > = {
-  active: ["canceled", "expired"],
+  active: ["suspended", "canceled", "expired"],
+  suspended: ["active", "canceled", "expired"],
   canceled: [],
   expired: [],
 };
@@ -360,13 +460,17 @@ export function isSubscriptionActive(
 /**
  * Resolved access state for a tenant: the union of its active subscriptions.
  * `active` is true when at least one subscription is active and in-window;
- * `remainingQuota` is the pooled unused budget across those subscriptions.
+ * `remainingQuota` is the pooled unused budget; `entitledCatalogueEntryIds` is
+ * the sorted, de-duplicated union of the active subscriptions' snapshot
+ * offerings — the composable seam a later milestone intersects with the
+ * published catalogue + PAT scopes.
  */
 export interface Entitlement {
   readonly organizationId: OrganizationId;
   readonly active: boolean;
-  readonly plans: readonly SubscriptionPlan[];
+  readonly planKeys: readonly string[];
   readonly remainingQuota: number;
+  readonly entitledCatalogueEntryIds: readonly string[];
 }
 
 export function resolveEntitlement(
@@ -377,19 +481,25 @@ export function resolveEntitlement(
   const activeSubscriptions = subscriptions.filter((subscription) =>
     isSubscriptionActive(subscription, now),
   );
-  const plans = [
-    ...new Set(activeSubscriptions.map((subscription) => subscription.plan)),
+  const planKeys = [
+    ...new Set(activeSubscriptions.map((subscription) => subscription.planKey)),
   ].sort();
   const remainingQuota = activeSubscriptions.reduce(
     (sum, subscription) =>
       sum + Math.max(0, subscription.quotaLimit - subscription.quotaUsed),
     0,
   );
+  const entitledCatalogueEntryIds = [
+    ...new Set(
+      activeSubscriptions.flatMap((subscription) => subscription.offerings),
+    ),
+  ].sort();
   return {
     organizationId,
     active: activeSubscriptions.length > 0,
-    plans,
+    planKeys,
     remainingQuota,
+    entitledCatalogueEntryIds,
   };
 }
 
@@ -411,10 +521,64 @@ export interface QuotaReservation {
   readonly remainingQuota: number;
 }
 
+export interface PlanPatch {
+  readonly name?: string;
+  readonly description?: string;
+  readonly selfServiceEligible?: boolean;
+  readonly adminGrantable?: boolean;
+  readonly durationDays?: number | null;
+  readonly requestQuota?: number;
+  readonly oneTimePerOrganization?: boolean;
+}
+
+export interface PlanRepository {
+  create(input: PlanInput, adminUserId: UserId): Promise<Plan>;
+  update(
+    id: string,
+    patch: PlanPatch,
+    adminUserId: UserId,
+  ): Promise<Plan | undefined>;
+  setEnabled(
+    id: string,
+    enabled: boolean,
+    adminUserId: UserId,
+  ): Promise<Plan | undefined>;
+  setPublished(
+    id: string,
+    published: boolean,
+    adminUserId: UserId,
+  ): Promise<Plan | undefined>;
+  attachCatalogueEntry(
+    planId: string,
+    catalogueEntryId: string,
+  ): Promise<Plan | undefined>;
+  detachCatalogueEntry(
+    planId: string,
+    catalogueEntryId: string,
+  ): Promise<Plan | undefined>;
+  listAll(): Promise<readonly Plan[]>;
+  listSelfServicePublished(): Promise<readonly Plan[]>;
+  findById(id: string): Promise<Plan | undefined>;
+  findByKey(key: string): Promise<Plan | undefined>;
+}
+
 export interface SubscriptionRepository {
   listForOrganization(
     organizationId: OrganizationId,
   ): Promise<readonly Subscription[]>;
+  /**
+   * Explicitly claim a plan for an organization: materialize a new active
+   * subscription in ONE transaction, snapshotting the plan's kind and its
+   * catalogue-entry set. When the plan is one-time-per-organization, a
+   * `plan_claims` row is inserted so a second claim fails
+   * (`DomainConflictError("plan_already_claimed")`). Throws
+   * `DomainValidationError` when the plan is missing or disabled.
+   */
+  grantFromPlan(
+    organizationId: OrganizationId,
+    planId: string,
+    actorUserId: UserId,
+  ): Promise<Subscription>;
   /**
    * Atomically reserve `amount` of request quota from the tenant's active
    * subscriptions. MUST be a single conditional UPDATE (no read-compare-write)
@@ -424,7 +588,10 @@ export interface SubscriptionRepository {
     organizationId: OrganizationId,
     amount: number,
   ): Promise<QuotaReservation>;
-  /** Terminal transition of an active subscription (state machine enforced). */
+  /**
+   * Transition a subscription through the state machine (suspend/resume/
+   * terminal). Returns undefined on an illegal or no-op transition.
+   */
   setStatus(
     id: string,
     status: SubscriptionStatus,

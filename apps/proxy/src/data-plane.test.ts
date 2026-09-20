@@ -52,8 +52,9 @@ function services(overrides: Partial<DataPlaneServices> = {}): DataPlaneServices
         Promise.resolve({
           organizationId,
           active: true,
-          plans: ["trial"],
+          planKeys: ["free-trial"],
           remainingQuota: 100,
+          entitledCatalogueEntryIds: [],
         }),
       ),
     reserveQuota: vi
@@ -138,8 +139,9 @@ describe("GET /v1/models", () => {
         resolveEntitlement: vi.fn<ResolveEntitlement>().mockResolvedValue({
           organizationId: "org-1",
           active: false,
-          plans: [],
+          planKeys: [],
           remainingQuota: 0,
+          entitledCatalogueEntryIds: [],
         }),
       }),
     );
@@ -181,8 +183,9 @@ describe("POST /v1/chat/completions", () => {
     const resolveEntitlement = vi.fn<ResolveEntitlement>().mockResolvedValue({
       organizationId: "org-1",
       active: true,
-      plans: ["trial"],
+      planKeys: ["free-trial"],
       remainingQuota: 100,
+      entitledCatalogueEntryIds: [],
     });
     const server = serverWith(services({ resolveEntitlement }));
     const response = await server.inject({

@@ -12,12 +12,14 @@ import {
   validateCatalogueEntryInput,
   validateCreatePersonalTenantCommand,
   validatePatName,
+  validatePlanInput,
   validateQuotaAmount,
   PAT_PREFIX,
   PAT_PUBLIC_ID_LENGTH,
   PAT_SECRET_LENGTH,
   type CatalogueEntry,
   type CatalogueEntryInput,
+  type PlanInput,
   type Subscription,
   type SubscriptionStatus,
 } from "./index.js";
@@ -160,20 +162,77 @@ describe("toPublicModel", () => {
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const NOW = new Date("2026-09-19T00:00:00.000Z");
+const AGENT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const AGENT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const AGENT_C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
 function sub(overrides: Partial<Subscription> = {}): Subscription {
   return {
     id: "33333333-3333-4333-8333-333333333333",
     organizationId: ORG,
-    plan: "trial",
+    planId: "44444444-4444-4444-8444-444444444444",
+    planKey: "free-trial",
+    planKind: "free_trial",
     status: "active",
     quotaLimit: 200,
     quotaUsed: 0,
     startsAt: new Date("2026-09-01T00:00:00.000Z"),
+    offerings: [],
     version: 1,
     ...overrides,
   };
 }
+
+const validPlan: PlanInput = {
+  key: "commercial-monthly",
+  name: "Commercial Monthly",
+  description: "A monthly commercial plan.",
+  kind: "commercial_monthly",
+  requestQuota: 10_000,
+  durationDays: 30,
+};
+
+describe("validatePlanInput", () => {
+  it("accepts a valid plan", () =>
+    expect(() => validatePlanInput(validPlan)).not.toThrow());
+  it("accepts a plan without a duration (open-ended)", () => {
+    const { durationDays: _omit, ...openEnded } = validPlan;
+    void _omit;
+    expect(() => validatePlanInput(openEnded)).not.toThrow();
+  });
+  it("accepts a zero request quota", () =>
+    expect(() =>
+      validatePlanInput({ ...validPlan, requestQuota: 0 }),
+    ).not.toThrow());
+  it.each<[string, Partial<PlanInput>]>([
+    ["uppercase key", { key: "Commercial" }],
+    ["key with underscore", { key: "free_trial" }],
+    ["key with space", { key: "free trial" }],
+    ["empty key", { key: "" }],
+    ["blank name", { name: "   " }],
+    ["empty name", { name: "" }],
+    ["unknown kind", { kind: "premium" as PlanInput["kind"] }],
+    ["negative quota", { requestQuota: -1 }],
+    ["fractional quota", { requestQuota: 1.5 }],
+    ["quota over cap", { requestQuota: 1_000_001 }],
+    ["zero duration", { durationDays: 0 }],
+    ["fractional duration", { durationDays: 1.5 }],
+    ["duration over cap", { durationDays: 3651 }],
+    ["control char in description", { description: "line\nbreak" }],
+  ])("rejects %s", (_label, patch) =>
+    expect(() => validatePlanInput({ ...validPlan, ...patch })).toThrow(
+      DomainValidationError,
+    ),
+  );
+  it("rejects a name longer than 120 characters", () =>
+    expect(() =>
+      validatePlanInput({ ...validPlan, name: "n".repeat(121) }),
+    ).toThrow(DomainValidationError));
+  it("rejects a description longer than 2048 characters", () =>
+    expect(() =>
+      validatePlanInput({ ...validPlan, description: "d".repeat(2049) }),
+    ).toThrow(DomainValidationError));
+});
 
 describe("isSubscriptionActive", () => {
   it("is active when status active and open-ended", () =>
@@ -192,7 +251,7 @@ describe("isSubscriptionActive", () => {
         NOW,
       ),
     ).toBe(false));
-  it.each<SubscriptionStatus>(["canceled", "expired"])(
+  it.each<SubscriptionStatus>(["suspended", "canceled", "expired"])(
     "is inactive when status is %s",
     (status) => expect(isSubscriptionActive(sub({ status }), NOW)).toBe(false),
   );
@@ -203,33 +262,55 @@ describe("resolveEntitlement", () => {
     expect(resolveEntitlement(ORG, [], NOW)).toEqual({
       organizationId: ORG,
       active: false,
-      plans: [],
+      planKeys: [],
       remainingQuota: 0,
+      entitledCatalogueEntryIds: [],
     }));
-  it("ignores terminal and out-of-window subscriptions", () => {
+  it("ignores terminal, suspended, and out-of-window subscriptions", () => {
     const entitlement = resolveEntitlement(
       ORG,
       [
-        sub({ status: "canceled", quotaLimit: 500, quotaUsed: 0 }),
-        sub({ endsAt: new Date("2026-09-01T00:00:00.000Z"), quotaLimit: 500 }),
+        sub({ status: "canceled", quotaLimit: 500, offerings: [AGENT_A] }),
+        sub({ status: "suspended", quotaLimit: 500, offerings: [AGENT_B] }),
+        sub({
+          endsAt: new Date("2026-09-01T00:00:00.000Z"),
+          quotaLimit: 500,
+          offerings: [AGENT_C],
+        }),
       ],
       NOW,
     );
     expect(entitlement.active).toBe(false);
     expect(entitlement.remainingQuota).toBe(0);
+    expect(entitlement.entitledCatalogueEntryIds).toEqual([]);
   });
-  it("pools remaining quota across the union of active subscriptions", () => {
+  it("unions plan keys, pooled quota, and offerings across active subscriptions", () => {
     const entitlement = resolveEntitlement(
       ORG,
       [
-        sub({ plan: "trial", quotaLimit: 200, quotaUsed: 150 }),
-        sub({ plan: "commercial", quotaLimit: 1000, quotaUsed: 100 }),
+        sub({
+          planKey: "free-trial",
+          quotaLimit: 200,
+          quotaUsed: 150,
+          offerings: [AGENT_B, AGENT_A],
+        }),
+        sub({
+          planKey: "commercial-monthly",
+          quotaLimit: 1000,
+          quotaUsed: 100,
+          offerings: [AGENT_B, AGENT_C],
+        }),
       ],
       NOW,
     );
     expect(entitlement.active).toBe(true);
-    expect(entitlement.plans).toEqual(["commercial", "trial"]);
+    expect(entitlement.planKeys).toEqual(["commercial-monthly", "free-trial"]);
     expect(entitlement.remainingQuota).toBe(50 + 900);
+    expect(entitlement.entitledCatalogueEntryIds).toEqual([
+      AGENT_A,
+      AGENT_B,
+      AGENT_C,
+    ]);
   });
   it("clamps a negative per-subscription remainder to zero", () =>
     expect(
@@ -242,13 +323,21 @@ describe("resolveEntitlement", () => {
 });
 
 describe("subscription state machine", () => {
-  it("allows active → canceled and active → expired", () => {
+  it("allows active → suspended/canceled/expired", () => {
+    expect(canTransitionSubscription("active", "suspended")).toBe(true);
     expect(canTransitionSubscription("active", "canceled")).toBe(true);
     expect(canTransitionSubscription("active", "expired")).toBe(true);
   });
+  it("allows suspended → active/canceled/expired (resume)", () => {
+    expect(canTransitionSubscription("suspended", "active")).toBe(true);
+    expect(canTransitionSubscription("suspended", "canceled")).toBe(true);
+    expect(canTransitionSubscription("suspended", "expired")).toBe(true);
+  });
   it.each<[SubscriptionStatus, SubscriptionStatus]>([
     ["active", "active"],
+    ["suspended", "suspended"],
     ["canceled", "active"],
+    ["canceled", "suspended"],
     ["expired", "active"],
     ["canceled", "expired"],
     ["expired", "canceled"],

@@ -11,6 +11,7 @@ const expectedSuites = new Set([
   "outbox.integration.test.ts",
   "identity.integration.test.ts",
   "catalogue.integration.test.ts",
+  "plan.integration.test.ts",
   "subscription.integration.test.ts",
   "pat.integration.test.ts",
 ]);

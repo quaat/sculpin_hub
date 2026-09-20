@@ -102,15 +102,23 @@ _Last updated: 2026-09-20_
   (`apps/web/app/lib/pat.ts`). Integration proves the DB holds no usable bearer credential and that
   revocation/expiry/inactive-owner fail closed. Deferred: `/v1/*` PAT auth in the proxy (M6),
   per-token usage (M7), admin PAT UI (Stage G), key rotation (future ADR).
-- **M4 (subscriptions/entitlements):** ✅ core implemented (pending independent security review) —
-  D-015. Subscription state machine (`active` → `canceled`/`expired`), entitlement as the UNION of
-  active in-window subscriptions (`resolveEntitlement`), and a `trial` (quota 200) granted in the
-  SAME provisioning transaction so a valid credential alone does NOT entitle `/v1/*` — the
-  `apps/web/app/lib/entitlement.ts` gate additionally requires an active, in-quota entitlement.
-  Quota reservation is a single atomic conditional UPDATE (`reserveQuota`, `FOR UPDATE`, no
-  read-compare-write); an integration test proves no over-draw under a concurrent last-quota
-  stampede. NO payment provider (D-004). Deferred: metering/analytics (M7), subscription outbox,
-  admin subscription UI (Stage G). Migration `20260919170000_subscriptions`.
+- **M4/S3 (plan domain, subscriptions, entitlements):** ✅ core implemented (pending independent
+  security review) — D-015 as reworked by **D-019** / [`ADR 008`](adr/008-plan-domain-and-explicit-subscription.md).
+  Admin-configurable `Plan` (`plans`) with an authoritative `plan_catalogue_entries` mapping; a
+  subscription is created only when a tenant EXPLICITLY claims a plan (`grantFromPlan`), which
+  SNAPSHOTS the plan's kind + catalogue-entry set (`subscription_catalogue_entries`) so later plan
+  edits never rewrite an existing subscription. Provisioning now grants NO subscription — a valid
+  credential alone does NOT entitle `/v1/*`; the `apps/web/app/lib/entitlement.ts` gate requires an
+  active, in-quota entitlement. State machine `active → {suspended, canceled, expired}`,
+  `suspended → {active, canceled, expired}` (suspended is NOT entitling). `one_time_per_organization`
+  is enforced by a `plan_claims` UNIQUE ledger (`23505` → `plan_already_claimed`). Entitlement is the
+  UNION of active in-window subscriptions (`resolveEntitlement`, now exposing
+  `entitledCatalogueEntryIds` for later intersection with catalogue + PAT scopes). Quota reservation
+  is a single atomic conditional UPDATE (`reserveQuota`, `FOR UPDATE`, no read-compare-write);
+  integration proves no over-draw under a concurrent last-quota stampede and that snapshot offerings
+  are frozen. NO payment provider (D-004). A seeded `free-trial` plan (quota 200, one-time) is the
+  default claim target. Deferred: claim/admin UI (Stage G), data-plane agent intersection, metering
+  (M7), subscription outbox. Migrations `20260919170000_subscriptions` + `20260920180000_plan_domain`.
 - **M3 (catalogue):** ✅ core implemented (pending independent security review) — D-014.
   Admin-published `public_alias → upstream_agent_id` map (`catalogue_entries`, migration
   `20260919160000_catalogue`). Fail-closed resolution: only `published` aliases resolve;
@@ -200,7 +208,8 @@ across M3/M5/M6/M7:
   on a valid PAT resolving to an active user/org.
 - **Phase C — catalogue + minimal entitlement (M3 + thin M4).** Admin-published model alias →
   upstream agent id map (public alias only; internal ids never leaked). Minimal entitlement so
-  authz is not "any PAT calls anything": grant a trial subscription on provisioning.
+  authz is not "any PAT calls anything". _(Superseded by D-019: entitlement now derives from an
+  EXPLICIT plan claim + per-subscription snapshot, not a trial auto-granted on provisioning.)_
 - **Phase D — metering + atomic quota (M7).** Usage events with no secrets/prompts/bodies;
   atomic trial-quota reservation (tested at last quota under concurrency).
 

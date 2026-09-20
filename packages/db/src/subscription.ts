@@ -1,41 +1,78 @@
 import {
+  DomainConflictError,
+  DomainValidationError,
+  assertSubscriptionTransition,
   validateQuotaAmount,
   type OrganizationId,
+  type PlanKind,
   type QuotaReservation,
   type Subscription,
-  type SubscriptionPlan,
   type SubscriptionRepository,
   type SubscriptionStatus,
 } from "@sculpin/domain";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 
 interface SubscriptionRow {
   id: string;
   organizationId: string;
-  plan: SubscriptionPlan;
+  planId: string;
+  planKey: string;
+  planKind: PlanKind;
   status: SubscriptionStatus;
   quotaLimit: number;
   quotaUsed: number;
   startsAt: Date;
   endsAt: Date | null;
+  offerings: string[] | null;
   version: number;
 }
 
-const SELECT_COLUMNS =
-  'id, organization_id AS "organizationId", plan, status, quota_limit AS "quotaLimit", quota_used AS "quotaUsed", starts_at AS "startsAt", ends_at AS "endsAt", version';
+// Joins `plans` for the stable plan key and aggregates the per-subscription
+// SNAPSHOT offerings (subscription_catalogue_entries). `offerings` is the frozen
+// catalogue-entry set copied at grant time — never the plan's current mapping.
+const SELECT_COLUMNS = `s.id,
+  s.organization_id AS "organizationId",
+  s.plan_id AS "planId",
+  p.key AS "planKey",
+  s.plan_kind AS "planKind",
+  s.status,
+  s.quota_limit AS "quotaLimit",
+  s.quota_used AS "quotaUsed",
+  s.starts_at AS "startsAt",
+  s.ends_at AS "endsAt",
+  COALESCE(
+    (SELECT array_agg(sce.catalogue_entry_id::text ORDER BY sce.catalogue_entry_id)
+       FROM subscription_catalogue_entries sce
+      WHERE sce.subscription_id = s.id),
+    ARRAY[]::text[]
+  ) AS offerings,
+  s.version`;
+
+const FROM_JOIN = "FROM subscriptions s JOIN plans p ON p.id = s.plan_id";
 
 function mapRow(row: SubscriptionRow): Subscription {
   return {
     id: row.id,
     organizationId: row.organizationId,
-    plan: row.plan,
+    planId: row.planId,
+    planKey: row.planKey,
+    planKind: row.planKind,
     status: row.status,
     quotaLimit: Number(row.quotaLimit),
     quotaUsed: Number(row.quotaUsed),
     startsAt: row.startsAt,
     ...(row.endsAt !== null ? { endsAt: row.endsAt } : {}),
+    offerings: row.offerings ?? [],
     version: row.version,
   };
+}
+
+interface PlanRowForGrant {
+  id: string;
+  kind: PlanKind;
+  requestQuota: number;
+  durationDays: number | null;
+  oneTimePerOrganization: boolean;
 }
 
 export class PostgresSubscriptionRepository implements SubscriptionRepository {
@@ -45,10 +82,103 @@ export class PostgresSubscriptionRepository implements SubscriptionRepository {
     organizationId: OrganizationId,
   ): Promise<readonly Subscription[]> {
     const result = await this.pool.query<SubscriptionRow>(
-      `SELECT ${SELECT_COLUMNS} FROM subscriptions WHERE organization_id=$1 ORDER BY starts_at, id`,
+      `SELECT ${SELECT_COLUMNS} ${FROM_JOIN} WHERE s.organization_id=$1 ORDER BY s.starts_at, s.id`,
       [organizationId],
     );
     return result.rows.map(mapRow);
+  }
+
+  async grantFromPlan(
+    organizationId: OrganizationId,
+    planId: string,
+    _actorUserId: string,
+  ): Promise<Subscription> {
+    void _actorUserId;
+    const client: PoolClient = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Row-lock the plan (FOR SHARE) so a concurrent setEnabled cannot flip the
+      // enabled flag between this eligibility check and the grant. It does NOT
+      // cover attach/detach (those touch plan_catalogue_entries, not this row);
+      // the snapshot copy below is a single INSERT ... SELECT, so under READ
+      // COMMITTED it captures a whole committed version of the catalogue set
+      // (never a torn half-set) regardless of concurrent admin edits.
+      const plan = await client.query<PlanRowForGrant & { enabled: boolean }>(
+        `SELECT id, kind, enabled, request_quota AS "requestQuota", duration_days AS "durationDays",
+                one_time_per_organization AS "oneTimePerOrganization"
+         FROM plans WHERE id = $1 FOR SHARE`,
+        [planId],
+      );
+      const planRow = plan.rows[0];
+      if (!planRow) {
+        await client.query("ROLLBACK");
+        throw new DomainValidationError("Plan does not exist.");
+      }
+      if (planRow.enabled !== true) {
+        await client.query("ROLLBACK");
+        throw new DomainValidationError("Plan is disabled.");
+      }
+      // one-time claim ledger: a duplicate (org, plan) raises 23505 → conflict.
+      if (planRow.oneTimePerOrganization) {
+        try {
+          await client.query(
+            "INSERT INTO plan_claims (organization_id, plan_id) VALUES ($1,$2)",
+            [organizationId, planId],
+          );
+        } catch (error) {
+          await client.query("ROLLBACK");
+          if ((error as { code?: string }).code === "23505")
+            throw new DomainConflictError("plan_already_claimed");
+          throw error;
+        }
+      }
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO subscriptions (organization_id, plan_id, plan_kind, status, quota_limit, ends_at)
+         VALUES (
+           $1, $2, $3::plan_kind, 'active', $4,
+           CASE WHEN $5::integer IS NULL THEN NULL ELSE now() + ($5::integer || ' days')::interval END
+         )
+         RETURNING id`,
+        [
+          organizationId,
+          planId,
+          planRow.kind,
+          planRow.requestQuota,
+          planRow.durationDays,
+        ],
+      );
+      const subscriptionId = inserted.rows[0]?.id;
+      if (!subscriptionId) {
+        await client.query("ROLLBACK");
+        throw new Error("subscription_insert_failed");
+      }
+      // SNAPSHOT copy: freeze the plan's CURRENT catalogue-entry set onto the
+      // subscription. Later plan edits never change these rows.
+      await client.query(
+        `INSERT INTO subscription_catalogue_entries (subscription_id, catalogue_entry_id)
+         SELECT $1, catalogue_entry_id FROM plan_catalogue_entries WHERE plan_id = $2`,
+        [subscriptionId, planId],
+      );
+      const row = await client.query<SubscriptionRow>(
+        `SELECT ${SELECT_COLUMNS} ${FROM_JOIN} WHERE s.id = $1`,
+        [subscriptionId],
+      );
+      await client.query("COMMIT");
+      const mapped = row.rows[0];
+      if (!mapped) throw new Error("subscription_read_failed");
+      return mapRow(mapped);
+    } catch (error) {
+      // If we already ROLLBACK'd above, this is a no-op; guard against a double
+      // rollback surfacing as an error.
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore — the transaction was already resolved.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async reserveQuota(
@@ -80,8 +210,7 @@ export class PostgresSubscriptionRepository implements SubscriptionRepository {
       [organizationId, amount],
     );
     const row = reserved.rows[0];
-    if (row)
-      return { granted: true, remainingQuota: Number(row.remaining) };
+    if (row) return { granted: true, remainingQuota: Number(row.remaining) };
     const pooled = await this.pool.query<{ remaining: string | null }>(
       `SELECT COALESCE(SUM(quota_limit - quota_used), 0) AS remaining
        FROM subscriptions
@@ -100,18 +229,34 @@ export class PostgresSubscriptionRepository implements SubscriptionRepository {
     id: string,
     status: SubscriptionStatus,
   ): Promise<Subscription | undefined> {
-    // Enforces the state machine in SQL: only an `active` subscription can move
-    // to a terminal state. A no-op (already terminal / not found / illegal
-    // target) updates 0 rows and returns undefined.
+    // Enforces the full state machine in SQL. The domain transition table is the
+    // source of truth for which `from` states may reach `status`; the UPDATE only
+    // touches a row whose current status is one of those legal predecessors. A
+    // no-op (illegal target / not found / already-terminal) updates 0 rows and
+    // returns undefined. Terminal transitions stamp `ends_at` when it is unset;
+    // suspend/resume leave the window untouched.
+    const legalFrom = (
+      ["active", "suspended", "canceled", "expired"] as const
+    ).filter((from) => {
+      try {
+        assertSubscriptionTransition(from, status);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (legalFrom.length === 0) return undefined;
+    const isTerminal = status === "canceled" || status === "expired";
     const result = await this.pool.query<SubscriptionRow>(
-      `UPDATE subscriptions
+      `UPDATE subscriptions s
        SET status = $2::subscription_status,
-           ends_at = CASE WHEN ends_at IS NULL THEN now() ELSE ends_at END,
-           version = version + 1,
+           ends_at = CASE WHEN $3::boolean AND s.ends_at IS NULL THEN now() ELSE s.ends_at END,
+           version = s.version + 1,
            updated_at = now()
-       WHERE id = $1 AND status = 'active' AND $2 IN ('canceled', 'expired')
+       FROM plans p
+       WHERE s.id = $1 AND p.id = s.plan_id AND s.status = ANY($4::subscription_status[])
        RETURNING ${SELECT_COLUMNS}`,
-      [id, status],
+      [id, status, isTerminal, legalFrom],
     );
     const row = result.rows[0];
     return row ? mapRow(row) : undefined;

@@ -11,6 +11,7 @@ export {
   PostgresPersonalTenantTransaction,
 } from "./tenant.js";
 export { PostgresCatalogueRepository } from "./catalogue.js";
+export { PostgresPlanRepository } from "./plan.js";
 export { PostgresSubscriptionRepository } from "./subscription.js";
 export {
   PostgresPatService,

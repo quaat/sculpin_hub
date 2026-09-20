@@ -58,11 +58,14 @@ function sub(overrides: Partial<Subscription> = {}): Subscription {
   return {
     id: "33333333-3333-4333-8333-333333333333",
     organizationId: ORG_ID,
-    plan: "trial",
+    planId: "44444444-4444-4444-8444-444444444444",
+    planKey: "free-trial",
+    planKind: "free_trial",
     status: "active",
     quotaLimit: 200,
     quotaUsed: 0,
     startsAt: new Date("2026-09-01T00:00:00.000Z"),
+    offerings: [],
     version: 1,
     ...overrides,
   };
@@ -71,6 +74,7 @@ function sub(overrides: Partial<Subscription> = {}): Subscription {
 function repoWith(subscriptions: readonly Subscription[]) {
   return {
     listForOrganization: vi.fn().mockResolvedValue(subscriptions),
+    grantFromPlan: vi.fn(),
     reserveQuota: vi.fn(),
     setStatus: vi.fn(),
   };
@@ -97,8 +101,9 @@ describe("getOrganizationEntitlement", () => {
     expect(ctx.entitlement).toEqual({
       organizationId: ORG_ID,
       active: true,
-      plans: ["trial"],
+      planKeys: ["free-trial"],
       remainingQuota: 150,
+      entitledCatalogueEntryIds: [],
     });
     expect(repository.listForOrganization).toHaveBeenCalledWith(ORG_ID);
   });

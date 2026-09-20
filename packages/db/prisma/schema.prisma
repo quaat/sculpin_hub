@@ -58,15 +58,17 @@ enum CatalogueEntryStatus {
   @@map("catalogue_entry_status")
 }
 
-enum SubscriptionPlan {
-  trial
-  commercial
+enum PlanKind {
+  free_trial
+  commercial_monthly
+  commercial_annual
 
-  @@map("subscription_plan")
+  @@map("plan_kind")
 }
 
 enum SubscriptionStatus {
   active
+  suspended
   canceled
   expired
 
@@ -145,6 +147,7 @@ model Organization {
   auditEvents          AuditEvent[]
   outboxEvents         OutboxEvent[]
   subscriptions        Subscription[]
+  planClaims           PlanClaim[]
   personalAccessTokens PersonalAccessToken[]
 
   @@unique([personalOwnerUserId], map: "organizations_personal_owner_user_id_key")
@@ -218,46 +221,127 @@ model OutboxEvent {
 // (fail closed); the upstream agent id is never projected to clients. Admins are
 // recorded via created_by/updated_by for traceability.
 model CatalogueEntry {
-  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  publicAlias     String               @unique(map: "catalogue_entries_public_alias_key") @map("public_alias") @db.VarChar(64)
-  upstreamAgentId String               @map("upstream_agent_id") @db.VarChar(255)
-  displayName     String               @map("display_name") @db.VarChar(120)
-  description     String?              @db.VarChar(2048)
-  status          CatalogueEntryStatus @default(draft)
-  createdByUserId String?              @map("created_by_user_id") @db.Uuid
-  updatedByUserId String?              @map("updated_by_user_id") @db.Uuid
-  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
-  version         Int                  @default(1)
-  createdBy       User?                @relation("CatalogueEntryCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  updatedBy       User?                @relation("CatalogueEntryUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  id                String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  publicAlias       String                       @unique(map: "catalogue_entries_public_alias_key") @map("public_alias") @db.VarChar(64)
+  upstreamAgentId   String                       @map("upstream_agent_id") @db.VarChar(255)
+  displayName       String                       @map("display_name") @db.VarChar(120)
+  description       String?                      @db.VarChar(2048)
+  status            CatalogueEntryStatus         @default(draft)
+  createdByUserId   String?                      @map("created_by_user_id") @db.Uuid
+  updatedByUserId   String?                      @map("updated_by_user_id") @db.Uuid
+  createdAt         DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime                     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version           Int                          @default(1)
+  createdBy         User?                        @relation("CatalogueEntryCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  updatedBy         User?                        @relation("CatalogueEntryUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  planLinks         PlanCatalogueEntry[]
+  subscriptionLinks SubscriptionCatalogueEntry[]
 
   @@index([status], map: "idx_catalogue_entries_status")
   @@map("catalogue_entries")
 }
 
-// M4 subscription (NO payment provider; D-004/D-015). Every tenant gets a
-// `trial` at provisioning so a valid credential alone is insufficient to call
-// `/v1/*` — access requires an ACTIVE, in-quota entitlement (the union of a
-// tenant's active subscriptions). Quota reservation is a single conditional
-// UPDATE (never read-compare-write); `quota_used <= quota_limit` is enforced by
-// a DB CHECK as defense in depth (CLAUDE.md rule 6).
+// S3 admin-configurable plan (D-019). A plan is a product a tenant can EXPLICITLY
+// claim; `plan_catalogue_entries` is the AUTHORITATIVE set of Sculpin agents the
+// plan grants. `kind` and the catalogue-entry set are SNAPSHOTTED onto a
+// subscription at grant time, so later plan edits never retroactively change an
+// existing subscription. `one_time_per_organization` is enforced by a
+// `plan_claims` UNIQUE row inserted in the same transaction as the subscription.
+model Plan {
+  id                     String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key                    String               @unique(map: "plans_key_key") @db.VarChar(63)
+  name                   String               @db.VarChar(120)
+  description            String?              @db.VarChar(2048)
+  kind                   PlanKind
+  enabled                Boolean              @default(true)
+  published              Boolean              @default(false)
+  selfServiceEligible    Boolean              @default(false) @map("self_service_eligible")
+  adminGrantable         Boolean              @default(true) @map("admin_grantable")
+  durationDays           Int?                 @map("duration_days")
+  requestQuota           Int                  @map("request_quota")
+  oneTimePerOrganization Boolean              @default(false) @map("one_time_per_organization")
+  createdByUserId        String?              @map("created_by") @db.Uuid
+  updatedByUserId        String?              @map("updated_by") @db.Uuid
+  createdAt              DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version                Int                  @default(1)
+  catalogueEntries       PlanCatalogueEntry[]
+  subscriptions          Subscription[]
+  planClaims             PlanClaim[]
+
+  @@index([enabled, published], map: "idx_plans_enabled_published")
+  @@map("plans")
+}
+
+// Admin-configured, AUTHORITATIVE plan→catalogue-entry mapping.
+model PlanCatalogueEntry {
+  planId           String         @map("plan_id") @db.Uuid
+  catalogueEntryId String         @map("catalogue_entry_id") @db.Uuid
+  plan             Plan           @relation(fields: [planId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  catalogueEntry   CatalogueEntry @relation(fields: [catalogueEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([planId, catalogueEntryId])
+  @@index([catalogueEntryId], map: "idx_plan_catalogue_entries_entry")
+  @@map("plan_catalogue_entries")
+}
+
+// One-time-per-organization plan claim ledger. A row (org, plan) is inserted in
+// the SAME transaction as the subscription ONLY when the plan is
+// one-time-per-organization; the UNIQUE constraint rejects a second claim (23505).
+model PlanClaim {
+  organizationId String       @map("organization_id") @db.Uuid
+  planId         String       @map("plan_id") @db.Uuid
+  claimedAt      DateTime     @default(now()) @map("claimed_at") @db.Timestamptz(6)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  plan           Plan         @relation(fields: [planId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([organizationId, planId])
+  @@index([planId], map: "idx_plan_claims_plan")
+  @@map("plan_claims")
+}
+
+// S3 subscription (NO payment provider; D-004/D-019). A subscription is created
+// only when a tenant EXPLICITLY claims a plan (`grantFromPlan`); a newly
+// provisioned tenant has none. `plan_kind` and the `subscription_catalogue_entries`
+// set are SNAPSHOTS taken at grant time from the plan, so later plan edits never
+// change an existing subscription. Access requires an ACTIVE, in-quota entitlement
+// (the union of a tenant's active subscriptions); `suspended` is not entitling.
+// Quota reservation is a single conditional UPDATE (never read-compare-write);
+// `quota_used <= quota_limit` is enforced by a DB CHECK (CLAUDE.md rule 6).
 model Subscription {
-  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId String             @map("organization_id") @db.Uuid
-  plan           SubscriptionPlan
-  status         SubscriptionStatus @default(active)
-  quotaLimit     Int                @map("quota_limit")
-  quotaUsed      Int                @default(0) @map("quota_used")
-  startsAt       DateTime           @default(now()) @map("starts_at") @db.Timestamptz(6)
-  endsAt         DateTime?          @map("ends_at") @db.Timestamptz(6)
-  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
-  version        Int                @default(1)
-  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  id             String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String                       @map("organization_id") @db.Uuid
+  planId         String                       @map("plan_id") @db.Uuid
+  planKind       PlanKind                     @map("plan_kind")
+  status         SubscriptionStatus           @default(active)
+  quotaLimit     Int                          @map("quota_limit")
+  quotaUsed      Int                          @default(0) @map("quota_used")
+  startsAt       DateTime                     @default(now()) @map("starts_at") @db.Timestamptz(6)
+  endsAt         DateTime?                    @map("ends_at") @db.Timestamptz(6)
+  createdAt      DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime                     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version        Int                          @default(1)
+  organization   Organization                 @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  plan           Plan                         @relation(fields: [planId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  offerings      SubscriptionCatalogueEntry[]
 
   @@index([organizationId, status], map: "idx_subscriptions_org_status")
   @@map("subscriptions")
+}
+
+// Per-subscription SNAPSHOT of the catalogue entries granted at claim time.
+// Rows are COPIED from `plan_catalogue_entries` when the subscription is created
+// and NEVER change afterward — the entitlement→agent mapping is frozen per
+// subscription (D-019).
+model SubscriptionCatalogueEntry {
+  subscriptionId   String         @map("subscription_id") @db.Uuid
+  catalogueEntryId String         @map("catalogue_entry_id") @db.Uuid
+  subscription     Subscription   @relation(fields: [subscriptionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  catalogueEntry   CatalogueEntry @relation(fields: [catalogueEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([subscriptionId, catalogueEntryId])
+  @@index([catalogueEntryId], map: "idx_subscription_catalogue_entries_entry")
+  @@map("subscription_catalogue_entries")
 }
 
 // M5 Personal Access Token (CLAUDE.md rule 2 / ADR 007). The wire token
