@@ -21,8 +21,13 @@ _Last updated: 2026-09-20_
   `/v1/models` serves ONLY Hub published aliases (`listPublishedModels`, never the upstream id).
   `createSecureProductionProxyServer` wires it in `main.ts`.
 - **M7 (usage metering / quota):** ⏳ partial — atomic quota reservation is live and enforced in the
-  proxy pipeline (D-015/D-017, concurrent last-unit race tested); per-request usage events +
-  analytics/audit surfaces are the remaining M7 tail.
+  proxy pipeline (D-015/D-017, concurrent last-unit race tested). **Per-request usage events are now
+  live (S13/D-023):** `reserveQuota` writes exactly one `usage_events` row in the SAME transaction as
+  the granted quota UPDATE (on grant only, never on denial), carrying NO secret/prompt/body — only the
+  org/subscription/catalogue-entry/PAT-row ids, the safe request id, and the quota cost. The
+  concurrent last-quota stampede test now also asserts usage-row count == granted count. Migration
+  `20260920200000_usage_events`. Remaining M7 tail is the analytics/admin READ surfaces (out of scope
+  for S13, YAGNI).
 
 - **M0 (Sculpin discovery):** ✅ complete — [`SCULPIN_INTEGRATION.md`](SCULPIN_INTEGRATION.md)
   written from source-only investigation of the read-only upstream. Key findings:
@@ -143,7 +148,8 @@ _Last updated: 2026-09-20_
 
 ## Explicitly NOT enabled yet
 
-Per-request usage accounting/analytics (M7 tail), Redis enforcement, Azure infra. (Authentication,
+Usage analytics/admin READ surfaces (M7 tail; per-request usage events themselves ARE now recorded —
+S13/D-023), Redis enforcement, Azure infra. (Authentication,
 OAuth callbacks, sessions, and admin bootstrap are live per M2; catalogue/subscriptions/PATs per
 M3/M4/M5; the production `/v1/models` + `/v1/chat/completions` broker with PAT auth, entitlement +
 atomic quota gating, and centralized upstream-credential injection is live per M6/D-017. The
@@ -173,9 +179,12 @@ centralized credential injection in M6/M7 — NOT as an unauthenticated intermed
   api-contracts **7/7** (adds the M6 data-plane error builders + chat schema); proxy **47/47**
   (data-plane 12, server 20, errors 8, upstream 4, shutdown 3).
   Integration tests require Compose Postgres (run via `run-db-integration.mjs` with an ephemeral DB;
-  **38/38**, stable across repeated runs, including `pat.integration.test.ts` (6),
-  `subscription.integration.test.ts` (6, incl. the concurrent last-unit quota race), and
-  `catalogue.integration.test.ts` (7, adds the `listPublishedModels` proxy-projection test)).
+  stable across repeated runs, including `pat.integration.test.ts` (6),
+  `subscription.integration.test.ts` (now **9** — adds usage-event assertions: a granted reservation
+  writes exactly one `usage_events` row with the right ids/quota_cost, a denied reservation (no active
+  sub OR exhausted) writes none, and the concurrent last-quota stampede records usage rows == granted
+  count; S13/D-023), and `catalogue.integration.test.ts` (7, adds the `listPublishedModels`
+  proxy-projection test)).
   `db:migration:test` drift-free. Note: the outbox suite now clears `outbox_events` in its
   `beforeAll` to own the table (fixes a pre-existing cross-suite ordering flake; see D-016).
 - **Stage F end-to-end (D-018):** `pnpm test:e2e` (`scripts/run-proxy-e2e.mjs`, ephemeral DB) drives
@@ -210,8 +219,10 @@ across M3/M5/M6/M7:
   upstream agent id map (public alias only; internal ids never leaked). Minimal entitlement so
   authz is not "any PAT calls anything". _(Superseded by D-019: entitlement now derives from an
   EXPLICIT plan claim + per-subscription snapshot, not a trial auto-granted on provisioning.)_
-- **Phase D — metering + atomic quota (M7).** Usage events with no secrets/prompts/bodies;
-  atomic trial-quota reservation (tested at last quota under concurrency).
+- **Phase D — metering + atomic quota (M7).** ✅ core implemented (S13/D-023): atomic quota
+  reservation (tested at last quota under concurrency) now also writes a per-request `usage_events`
+  row in the SAME transaction on grant — no secrets/prompts/bodies. Remaining tail: analytics/admin
+  READ surfaces (out of scope for S13).
 
 No open blockers: the Sculpin tenant-mapping decision that shapes Phase C is **resolved** by
 D-008 (single shared upstream credential; admin-curated public-alias→agent map).

@@ -9,6 +9,7 @@ import {
   type Subscription,
   type SubscriptionRepository,
   type SubscriptionStatus,
+  type UsageContext,
 } from "@sculpin/domain";
 import type { Pool, PoolClient } from "pg";
 
@@ -184,45 +185,92 @@ export class PostgresSubscriptionRepository implements SubscriptionRepository {
   async reserveQuota(
     organizationId: OrganizationId,
     amount: number,
+    usage: UsageContext,
   ): Promise<QuotaReservation> {
     validateQuotaAmount(amount);
-    // Atomic reservation: a single UPDATE whose target row is selected (and
-    // row-locked) by a subquery that only matches an active, in-window
-    // subscription with enough remaining budget. `FOR UPDATE` (no SKIP LOCKED)
-    // serializes concurrent reservations on the same subscription so a
-    // last-quota race yields exactly one winner — the loser re-evaluates the
-    // `quota_used + $2 <= quota_limit` predicate against committed data and finds
-    // no row, so 0 rows are updated (denied). No read-compare-write anywhere.
-    const reserved = await this.pool.query<{ remaining: number }>(
-      `UPDATE subscriptions
-       SET quota_used = quota_used + $2, version = version + 1, updated_at = now()
-       WHERE id = (
-         SELECT id FROM subscriptions
+    // Atomic reservation + usage accounting (CLAUDE.md rule 6; S13/M7 D-023).
+    // Both the conditional quota UPDATE and the granted request's usage_events
+    // INSERT run in ONE explicit transaction so quota and usage commit together
+    // or neither. The UPDATE's target row is selected (and row-locked) by a
+    // subquery that only matches an active, in-window subscription with enough
+    // remaining budget. `FOR UPDATE` (no SKIP LOCKED) serializes concurrent
+    // reservations on the same subscription so a last-quota race yields exactly
+    // one winner; the loser re-evaluates `quota_used + $2 <= quota_limit` against
+    // committed data, finds no row, and 0 rows are updated (denied). The lock is
+    // held until COMMIT so the usage row is bound to the winning update. No
+    // read-compare-write anywhere. A usage_events row is written ONLY on grant —
+    // never on a denial.
+    const client: PoolClient = await this.pool.connect();
+    let resolved = false;
+    try {
+      await client.query("BEGIN");
+      const reserved = await client.query<{ id: string; remaining: number }>(
+        `UPDATE subscriptions
+         SET quota_used = quota_used + $2, version = version + 1, updated_at = now()
+         WHERE id = (
+           SELECT id FROM subscriptions
+           WHERE organization_id = $1
+             AND status = 'active'
+             AND (ends_at IS NULL OR ends_at > now())
+             AND quota_used + $2 <= quota_limit
+           ORDER BY ends_at NULLS LAST, id
+           FOR UPDATE
+           LIMIT 1
+         )
+         RETURNING id, quota_limit - quota_used AS remaining`,
+        [organizationId, amount],
+      );
+      const row = reserved.rows[0];
+      if (row) {
+        // Granted: record the per-request usage event in the SAME transaction.
+        // NO secret/prompt/body is stored; pat_id is the PAT row id.
+        await client.query(
+          `INSERT INTO usage_events
+             (organization_id, subscription_id, catalogue_entry_id, pat_id, request_id, quota_cost)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            organizationId,
+            row.id,
+            usage.catalogueEntryId,
+            usage.patId,
+            usage.requestId,
+            amount,
+          ],
+        );
+        await client.query("COMMIT");
+        resolved = true;
+        return { granted: true, remainingQuota: Number(row.remaining) };
+      }
+      // Denied: no writes happened; close the transaction and report pooled
+      // remaining. NO usage event is recorded on a denial.
+      await client.query("COMMIT");
+      resolved = true;
+      const pooled = await client.query<{ remaining: string | null }>(
+        `SELECT COALESCE(SUM(quota_limit - quota_used), 0) AS remaining
+         FROM subscriptions
          WHERE organization_id = $1
            AND status = 'active'
-           AND (ends_at IS NULL OR ends_at > now())
-           AND quota_used + $2 <= quota_limit
-         ORDER BY ends_at NULLS LAST, id
-         FOR UPDATE
-         LIMIT 1
-       )
-       RETURNING quota_limit - quota_used AS remaining`,
-      [organizationId, amount],
-    );
-    const row = reserved.rows[0];
-    if (row) return { granted: true, remainingQuota: Number(row.remaining) };
-    const pooled = await this.pool.query<{ remaining: string | null }>(
-      `SELECT COALESCE(SUM(quota_limit - quota_used), 0) AS remaining
-       FROM subscriptions
-       WHERE organization_id = $1
-         AND status = 'active'
-         AND (ends_at IS NULL OR ends_at > now())`,
-      [organizationId],
-    );
-    return {
-      granted: false,
-      remainingQuota: Number(pooled.rows[0]?.remaining ?? 0),
-    };
+           AND (ends_at IS NULL OR ends_at > now())`,
+        [organizationId],
+      );
+      return {
+        granted: false,
+        remainingQuota: Number(pooled.rows[0]?.remaining ?? 0),
+      };
+    } catch (error) {
+      if (!resolved) {
+        // Guard against a double rollback surfacing as an error (mirrors
+        // grantFromPlan): only roll back if we have not already resolved the tx.
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          // ignore — the transaction was already resolved.
+        }
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async setStatus(

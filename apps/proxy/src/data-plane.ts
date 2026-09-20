@@ -25,6 +25,7 @@ import {
   type Entitlement,
   type PatIdentity,
   type QuotaReservation,
+  type UsageContext,
 } from "@sculpin/domain";
 import type { RouteRegistry } from "./registry.js";
 import {
@@ -51,6 +52,7 @@ export interface DataPlaneServices {
   reserveQuota(
     organizationId: string,
     amount: number,
+    usage: UsageContext,
   ): Promise<QuotaReservation>;
   listPublishedModels(): Promise<
     readonly { id: string; catalogueEntryId: string; created: number }[]
@@ -102,8 +104,8 @@ export function createDataPlaneServices(
       const subs = await subscriptions.listForOrganization(organizationId);
       return resolveEntitlement(organizationId, subs, now());
     },
-    reserveQuota: (organizationId, amount) =>
-      subscriptions.reserveQuota(organizationId, amount),
+    reserveQuota: (organizationId, amount, usage) =>
+      subscriptions.reserveQuota(organizationId, amount, usage),
     listPublishedModels: () => catalogue.listPublishedModels(),
     resolvePublishedAlias: (alias) => catalogue.resolvePublishedAlias(alias),
     upstream,
@@ -201,10 +203,20 @@ function handleChatCompletions(services: DataPlaneServices) {
       return reply.code(404).send(modelNotFoundError());
     // Atomic reservation (CLAUDE.md rule 6). Fail closed: no upstream call when
     // the tenant is out of quota. A subsequent upstream failure does not refund
-    // the unit (v1 accounting is best-effort; usage counts are not billed).
+    // the unit (v1 accounting is best-effort; usage counts are not billed). ON
+    // GRANT this also records a per-request usage_events row in the SAME
+    // transaction as the quota UPDATE (S13/M7, D-023). The usage context carries
+    // only safe correlation ids — no secret/prompt/body: the resolved
+    // catalogue-entry id, the PAT ROW id (never the token secret), and the
+    // Fastify per-request correlation id.
     const reservation = await services.reserveQuota(
       identity.organizationId,
       CHAT_QUOTA_COST,
+      {
+        catalogueEntryId: resolved.catalogueEntryId,
+        patId: identity.patId,
+        requestId: request.id,
+      },
     );
     if (!reservation.granted)
       return reply.code(429).send(insufficientQuotaError());

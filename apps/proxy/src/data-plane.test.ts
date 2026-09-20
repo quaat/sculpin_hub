@@ -462,7 +462,15 @@ describe("POST /v1/chat/completions", () => {
       model: "agent-uuid-123",
       messages: [{ role: "user", content: "hello" }],
     });
-    expect(reserveQuota).toHaveBeenCalledWith("org-1", 1);
+    expect(reserveQuota).toHaveBeenCalledOnce();
+    const [orgArg, amountArg, usageArg] = reserveQuota.mock.calls[0]!;
+    expect(orgArg).toBe("org-1");
+    expect(amountArg).toBe(1);
+    expect(usageArg).toMatchObject({
+      catalogueEntryId: "entry-support",
+      patId: "pat-1",
+    });
+    expect(typeof usageArg.requestId).toBe("string");
     // Response header allowlist (S11 conversation isolation): the upstream
     // conversation header is NOT returned to the client; cookies/server drop too.
     expect(response.headers["x-exodus-conversation-id"]).toBeUndefined();

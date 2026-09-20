@@ -646,6 +646,18 @@ export interface QuotaReservation {
   readonly remainingQuota: number;
 }
 
+/**
+ * The per-request context recorded ALONGSIDE a granted quota reservation as a
+ * usage event (S13/M7, D-023). It carries ONLY safe correlation identifiers — no
+ * secret, prompt, request/response body, raw PAT, OAuth token, or upstream key
+ * (CLAUDE.md rule 5). `patId` is the PAT ROW id, never the token secret.
+ */
+export interface UsageContext {
+  readonly catalogueEntryId: string;
+  readonly patId: string;
+  readonly requestId: string;
+}
+
 export interface PlanPatch {
   readonly name?: string;
   readonly description?: string;
@@ -707,11 +719,15 @@ export interface SubscriptionRepository {
   /**
    * Atomically reserve `amount` of request quota from the tenant's active
    * subscriptions. MUST be a single conditional UPDATE (no read-compare-write)
-   * so concurrent last-quota attempts cannot over-draw.
+   * so concurrent last-quota attempts cannot over-draw. ON GRANT (and never on
+   * denial) it ALSO records a `usage_events` row from `usage` in the SAME
+   * transaction as the quota UPDATE, so quota and usage commit together or
+   * neither (S13/M7, D-023). `usage` carries no secret/prompt/body.
    */
   reserveQuota(
     organizationId: OrganizationId,
     amount: number,
+    usage: UsageContext,
   ): Promise<QuotaReservation>;
   /**
    * Transition a subscription through the state machine (suspend/resume/

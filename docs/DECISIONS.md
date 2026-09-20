@@ -510,6 +510,40 @@ proxy tests: request/response conversation headers dropped; non-streaming + SSE 
 slow upstream returns 504 with no internal detail. `.env.example` and `THREAT_MODEL.md` updated.
 Independent security review required before sign-off. **By:** S10-12 implementation pass.
 
+## D-023 — S13: per-request usage events (M7 metering tail), atomic with the quota reservation
+
+**Context.** [[D-015]] made trial-quota reservation atomic and [[D-017]] wired it into the data plane,
+but the M7 metering tail — a durable per-request usage record — was still missing. The requirement:
+record ONE usage event per accepted request WITHOUT ever persisting a secret, prompt, request/response
+body, raw PAT, OAuth token, or upstream key (CLAUDE.md rule 5), and do it so a request can never be
+served-without-metered or metered-without-served.
+
+**Decision.**
+
+1. **New `usage_events` table** (migration `20260920200000_usage_events`): `id` (uuid), `organization_id`,
+   `subscription_id`, `catalogue_entry_id`, `pat_id`, `request_id` (varchar 128), `quota_cost` (int),
+   `occurred_at` (timestamptz default now()), FKs ON DELETE RESTRICT / ON UPDATE NO ACTION, index on
+   `(organization_id, occurred_at)`. It carries NO secret/prompt/body — `pat_id` is the PAT ROW uuid,
+   NOT the token secret; consistent with the no-secret-columns rule that also governs usage accounting
+   ([[D-007]]: the Hub does not meter on Sculpin's self-reported token usage, so no upstream `usage`
+   heuristic is stored here either).
+
+2. **Atomic with the reservation.** `PostgresSubscriptionRepository.reserveQuota(org, amount, usage)`
+   now runs the conditional quota UPDATE and, ON GRANT ONLY, the `usage_events` INSERT inside ONE
+   explicit transaction (BEGIN…COMMIT) on a pooled client. The `FOR UPDATE` (no SKIP LOCKED) lock is
+   held until COMMIT, so quota and usage commit together or neither. A DENIED reservation (no active
+   sub / exhausted) writes NO usage row. The domain `SubscriptionRepository.reserveQuota` signature and
+   the proxy `DataPlaneServices.reserveQuota` gained a third `usage: UsageContext` argument; the proxy
+   call site (`handleChatCompletions`) passes `{ catalogueEntryId: resolved.catalogueEntryId, patId:
+   identity.patId, requestId: request.id }` AFTER alias resolution + authorization and BEFORE any
+   upstream call (ordering invariant preserved).
+
+**Verification.** prisma validate/format/generate clean; domain/db/proxy tsc + eslint clean (source);
+domain (116), db unit (27), proxy (67) suites green. New DB integration assertions (skipped without
+Postgres): a granted reservation writes exactly one correct `usage_events` row; a denied reservation
+(no sub OR exhausted) writes none; the concurrent last-quota stampede records usage rows == granted
+count (the key atomicity proof). No analytics/read API added (YAGNI; the M7 tail). **By:** S13.
+
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 
 **Decision:** Set `account.accountLinking.enabled = false` in `apps/web/app/lib/auth.ts`. An

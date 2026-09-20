@@ -26,7 +26,7 @@ their acceptance criteria. Live status is in [`STATUS.md`](STATUS.md).
 | M4  | Plans & subscriptions (trial + commercial, NO payments), entitlements           | M2, M3     | ✅ core (review pending)     |
 | M5  | Personal Access Tokens lifecycle (+ dedicated security review)                  | M2, M4     | ✅ core (review pending)     |
 | M6  | OpenAI-compatible proxy / broker (fail-closed registry, streaming)              | M0, M5     | ✅ core (review PASS)        |
-| M7  | Usage metering, quota reservation, analytics/audit                              | M4, M6     | ⏳ quota done; metering next |
+| M7  | Usage metering, quota reservation, analytics/audit                              | M4, M6     | ⏳ quota + per-request usage events done (S13/D-023); analytics/audit surfaces next |
 | M8  | Azure deployment (Key Vault, managed identity, IaC)                             | M6         | pending                      |
 | M9  | Complete verification (security, E2E, ops readiness)                            | all        | pending                      |
 
@@ -49,8 +49,10 @@ their acceptance criteria. Live status is in [`STATUS.md`](STATUS.md).
 - **M6:** Default-DENY `/v1/*` registry; only confirmed Sculpin routes registered; upstream
   credential injection centralized; SSE passthrough byte-for-byte; no PAT/cookie/Authorization
   forwarded upstream; no internal URL leaked.
-- **M7:** Usage events without secrets/prompts/bodies; atomic quota under concurrency (tested
-  at last-quota); analytics/audit surfaces.
+- **M7:** Usage events without secrets/prompts/bodies (DONE, S13/D-023: one `usage_events` row per
+  granted reservation, written atomically in the same transaction as the quota UPDATE; none on
+  denial); atomic quota under concurrency (tested at last-quota, incl. usage-rows == granted-count);
+  analytics/audit READ surfaces still to come.
 - **M8:** Secrets via Key Vault + managed identity; no secrets in IaC; private connectivity to
   Sculpin considered.
 - **M9:** Full security review, E2E flows, ops runbook, SLOs, rollback verified.

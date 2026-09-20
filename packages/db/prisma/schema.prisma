@@ -149,6 +149,7 @@ model Organization {
   subscriptions        Subscription[]
   planClaims           PlanClaim[]
   personalAccessTokens PersonalAccessToken[]
+  usageEvents          UsageEvent[]
 
   @@unique([personalOwnerUserId], map: "organizations_personal_owner_user_id_key")
   @@index([status], map: "idx_organizations_status")
@@ -237,6 +238,7 @@ model CatalogueEntry {
   planLinks         PlanCatalogueEntry[]
   subscriptionLinks SubscriptionCatalogueEntry[]
   patScopes         PersonalAccessTokenScope[]
+  usageEvents       UsageEvent[]
 
   @@index([status], map: "idx_catalogue_entries_status")
   @@map("catalogue_entries")
@@ -325,6 +327,7 @@ model Subscription {
   organization   Organization                 @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   plan           Plan                         @relation(fields: [planId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   offerings      SubscriptionCatalogueEntry[]
+  usageEvents    UsageEvent[]
 
   @@index([organizationId, status], map: "idx_subscriptions_org_status")
   @@map("subscriptions")
@@ -371,6 +374,7 @@ model PersonalAccessToken {
   user           User                       @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   organization   Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   scopes         PersonalAccessTokenScope[]
+  usageEvents    UsageEvent[]
 
   @@index([userId, status], map: "idx_personal_access_tokens_user_status")
   @@index([organizationId, status], map: "idx_personal_access_tokens_org_status")
@@ -393,6 +397,31 @@ model PersonalAccessTokenScope {
   @@id([patId, catalogueEntryId])
   @@index([catalogueEntryId], map: "idx_personal_access_token_scopes_entry")
   @@map("personal_access_token_scopes")
+}
+
+// S13 per-request usage event (M7 metering tail). Exactly ONE row is written in
+// the SAME transaction as each GRANTED quota reservation (never on denial), so
+// quota and usage commit atomically together (D-023). This table carries NO
+// secret, prompt, request/response body, raw PAT, OAuth token, or upstream key
+// (CLAUDE.md rule 5): `pat_id` is the PAT ROW UUID (a foreign key), not the token
+// secret, and `quota_cost` is the units reserved. `request_id` is the safe
+// correlation id. Analytics/admin surfaces read this table in a later milestone.
+model UsageEvent {
+  id               String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId   String              @map("organization_id") @db.Uuid
+  subscriptionId   String              @map("subscription_id") @db.Uuid
+  catalogueEntryId String              @map("catalogue_entry_id") @db.Uuid
+  patId            String              @map("pat_id") @db.Uuid
+  requestId        String              @map("request_id") @db.VarChar(128)
+  quotaCost        Int                 @map("quota_cost")
+  occurredAt       DateTime            @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  subscription     Subscription        @relation(fields: [subscriptionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  catalogueEntry   CatalogueEntry      @relation(fields: [catalogueEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  pat              PersonalAccessToken @relation(fields: [patId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([organizationId, occurredAt], map: "idx_usage_events_org_occurred")
+  @@map("usage_events")
 }
 
 // Better Auth server-side (database) session. The cookie carries only the
