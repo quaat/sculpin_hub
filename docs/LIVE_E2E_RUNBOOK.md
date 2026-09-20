@@ -52,7 +52,7 @@ Required for a live run (see `.env.example` for the full annotated list):
 | Variable | What to set it to |
 |----------|-------------------|
 | `DATABASE_URL` | `postgresql://sculpin:<password>@localhost:5432/sculpin_hub` (matches step 1) |
-| `HUB_PUBLIC_URL` | The public origin clients use to reach the Hub, e.g. `http://localhost:3002`. The Connect page derives the client base URL as `${HUB_PUBLIC_URL}/v1`. |
+| `HUB_PUBLIC_URL` | The public origin that serves the OpenAI `/v1/*` data plane — i.e. the **proxy**, e.g. `http://localhost:3001` locally. The Connect page derives the client base URL as `${HUB_PUBLIC_URL}/v1`. Distinct from `BETTER_AUTH_URL` (the web app, `:3002`). |
 | `PORT` / `PROXY_PORT` | Web `3002`, proxy `3001` (defaults). |
 | `SCULPIN_UPSTREAM_URL` | Internal Sculpin base URL the **proxy** dials, e.g. `http://localhost:8001`. NEVER exposed to clients. |
 | `SCULPIN_UPSTREAM_API_KEY` | The Hub's single upstream credential (Sculpin's `OPENAI_COMPAT_DEV_API_KEY` in dev, or a real `sk-exodus-…` DB key in prod). Used ONLY by the proxy; never sent to browsers/logs. |

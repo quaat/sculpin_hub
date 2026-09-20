@@ -257,14 +257,14 @@ describe("PAT-hash configuration (least privilege)", () => {
 describe("data-plane configuration", () => {
   const validDataPlane = {
     NODE_ENV: "test",
-    HUB_PUBLIC_URL: "http://localhost:3002",
+    HUB_PUBLIC_URL: "http://localhost:3001",
     SCULPIN_UPSTREAM_URL: "http://sculpin.internal:8001",
     SCULPIN_UPSTREAM_API_KEY: "sk-upstream-canary-secret",
     PAT_HASH_SECRET: "unit-test-pat-hash-secret-32chars!!!",
   };
   it("parses a complete data-plane environment", () => {
     const config = parseDataPlaneConfig(validDataPlane);
-    expect(config.hubPublicUrl).toBe("http://localhost:3002");
+    expect(config.hubPublicUrl).toBe("http://localhost:3001");
     expect(config.sculpinUpstreamUrl).toBe("http://sculpin.internal:8001");
     expect(config.sculpinUpstreamApiKey).toBe("sk-upstream-canary-secret");
     expect(config.patHashSecret).toBe("unit-test-pat-hash-secret-32chars!!!");
