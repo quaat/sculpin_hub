@@ -127,6 +127,74 @@ describe("web auth configuration", () => {
   });
 });
 
+describe("E2E test-auth seam configuration (S15, fail-closed)", () => {
+  const seedKey = "e2e-session-seed-key-32chars-min-ok!!";
+  it("is OFF by default (flag absent)", () => {
+    const config = parseWebAuthConfig(validAuth);
+    expect(config.e2eTestAuth).toBe(false);
+    expect(config.e2eSessionSeedKey).toBeUndefined();
+  });
+  it("ignores a stray seed key when the flag is not exactly '1'", () => {
+    const config = parseWebAuthConfig({
+      ...validAuth,
+      E2E_TEST_AUTH: "true",
+      E2E_SESSION_SEED_KEY: seedKey,
+    });
+    expect(config.e2eTestAuth).toBe(false);
+    expect(config.e2eSessionSeedKey).toBeUndefined();
+  });
+  it("HARD FAILS when the flag is enabled under production", () => {
+    expect(() =>
+      parseWebAuthConfig({
+        ...validAuth,
+        NODE_ENV: "production",
+        BETTER_AUTH_URL: "https://hub.example.com",
+        E2E_TEST_AUTH: "1",
+        E2E_SESSION_SEED_KEY: seedKey,
+      }),
+    ).toThrow("E2E_TEST_AUTH must never be enabled in production");
+  });
+  it("fails closed when the flag is enabled without a seed key", () => {
+    expect(() =>
+      parseWebAuthConfig({ ...validAuth, E2E_TEST_AUTH: "1" }),
+    ).toThrow("E2E_SESSION_SEED_KEY");
+  });
+  it("fails closed when the seed key is too short", () => {
+    expect(() =>
+      parseWebAuthConfig({
+        ...validAuth,
+        E2E_TEST_AUTH: "1",
+        E2E_SESSION_SEED_KEY: "too-short",
+      }),
+    ).toThrow("E2E_SESSION_SEED_KEY");
+  });
+  it("enables the seam with a valid seed key in a non-production env", () => {
+    const config = parseWebAuthConfig({
+      ...validAuth,
+      E2E_TEST_AUTH: "1",
+      E2E_SESSION_SEED_KEY: seedKey,
+    });
+    expect(config.e2eTestAuth).toBe(true);
+    expect(config.e2eSessionSeedKey).toBe(seedKey);
+  });
+  it("does not echo the seed key in the production error", () => {
+    let message = "";
+    try {
+      parseWebAuthConfig({
+        ...validAuth,
+        NODE_ENV: "production",
+        BETTER_AUTH_URL: "https://hub.example.com",
+        E2E_TEST_AUTH: "1",
+        E2E_SESSION_SEED_KEY: seedKey,
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("E2E_TEST_AUTH");
+    expect(message).not.toContain(seedKey);
+  });
+});
+
 describe("PAT-hash configuration (least privilege)", () => {
   const validPat = {
     PAT_HASH_SECRET: "unit-test-pat-hash-secret-32chars!!!",

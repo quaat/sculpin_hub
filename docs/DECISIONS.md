@@ -544,6 +544,64 @@ Postgres): a granted reservation writes exactly one correct `usage_events` row; 
 (no sub OR exhausted) writes none; the concurrent last-quota stampede records usage rows == granted
 count (the key atomicity proof). No analytics/read API added (YAGNI; the M7 tail). **By:** S13.
 
+## D-024 — S15 TEST-ONLY browser E2E auth seam (fail-closed, structurally absent from prod)
+
+**Context.** M9's "E2E flows" needs a browser/control-plane E2E suite (Playwright) that drives the
+REAL app code below the auth boundary (catalogue authorization, subscription/plan claim, entitlement,
+PAT mint/one-time-display, admin gating). OAuth cannot run in a deterministic suite (no live Google/
+GitHub per the testing rule), so the suite needs a way to obtain a real session for a seeded persona
+WITHOUT weakening or altering the production authentication path.
+
+**Decision.** Add a TEST-ONLY session seam that is impossible to reach in production, and keep the
+production auth path byte-for-byte unchanged.
+
+1. **Config fail-closed guard (`@sculpin/config`).** `AuthConfig` gains `e2eTestAuth: boolean` +
+   optional `e2eSessionSeedKey`. `resolveE2EAuth` treats `E2E_TEST_AUTH` as enabled ONLY when it is
+   exactly `"1"`; any other value (including unset) disables the seam and IGNORES a stray seed key. If
+   enabled it HARD FAILS when `NODE_ENV=production` (error text: "E2E_TEST_AUTH must never be enabled
+   in production") and requires `E2E_SESSION_SEED_KEY` of ≥32 chars (error names the field only, never
+   echoes the value).
+
+2. **Seam plugin (`apps/web/app/lib/e2e-auth-seam.ts`).** `e2eSessionSeamPlugin({ seedKey })` is a
+   Better Auth plugin exposing EXACTLY one endpoint, `POST /e2e/sign-in`. The handler (a) re-checks
+   `process.env.E2E_TEST_AUTH === "1"` (else `NOT_FOUND`), (b) constant-time compares the
+   `x-e2e-seed-key` header via `timingSafeEqual` (a length mismatch is a failure, no oracle), (c)
+   accepts `{ userId }` (uuid) OR `{ email }` and looks up an EXISTING user only — it NEVER creates or
+   provisions, so it cannot manufacture a principal, (d) mints a session via
+   `internalAdapter.createSession` + `setSessionCookie`, returning only `{ ok: true }`. No token/key/
+   cookie is ever logged; the module has no import-time side effects.
+
+3. **Wiring only in the E2E branch (`apps/web/app/lib/auth.ts`).** Production `buildAuthOptions` is
+   UNCHANGED — no `if (E2E_TEST_AUTH)` branch inside it, `session.ts`/`authz-guard.ts`/
+   `databaseHooks`/provisioning untouched. A new `buildE2EAuthOptions` throws under
+   `NODE_ENV=production`, throws unless `e2eTestAuth===true` with a seed key, then spreads the base
+   options and rebuilds `plugins` as `[e2eSessionSeamPlugin(...), nextCookies()]` (nextCookies stays
+   LAST). `getAuth()` selects `buildE2EAuthOptions` ONLY when `config.e2eTestAuth === true`. A unit
+   test asserts production auth options expose NO `/e2e/` route.
+
+4. **Harness is a CI responsibility.** `apps/web/playwright.config.ts` (single worker, no retries,
+   gated on `E2E_TEST_AUTH=1`), `e2e/global-setup.ts` (seeds personas via the REAL
+   `provisionPersonalTenant` + `PostgresCatalogue/PlanRepository`), `e2e/fixtures.ts` (authenticates
+   personas by POSTing the seam endpoint with the seed key from a NODE request context — never page
+   JS), and user/admin/unauthenticated `*.spec.ts` journeys. Vitest excludes `e2e/**` so the seam
+   specs never run in the unit suite. A new CI `browser-e2e` job provisions Postgres, deploys
+   migrations, installs Chromium, typechecks `e2e/tsconfig.json`, and runs the suite with
+   `E2E_TEST_AUTH=1` + ephemeral (non-secret) env; NODE_ENV is `test`, never `production`.
+
+**Accepted posture.** The seam is a deliberate, narrowly-scoped test affordance whose blast radius is
+bounded by three independent gates (config guard + `buildE2EAuthOptions` production throw + handler
+flag/seed-key re-check) plus the "existing user only" rule. Better Auth stays pinned at 1.7.5.
+
+**Verification (sandbox).** config unit **44** pass (incl. 7 new seam-guard cases: off by default,
+stray key ignored, prod hard-fail, missing/short seed key, enable non-prod, no seed-key echo); web
+unit **158** pass with `e2e/**` excluded (incl. new `e2e-auth-seam.test.ts` guard suite proving the
+handler never mints on a rejected request, and `auth.test.ts` proving production options carry no
+`/e2e/` route + nextCookies stays last); config + web typecheck and `packages/config/src`+`apps/web/
+app` lint clean. **Not runnable in the sandbox (CI responsibility, do NOT claim passed locally):** the
+Playwright browser suite (needs browsers + Postgres + `@playwright/test`) and the `e2e/tsconfig.json`
+typecheck/lint (needs `@playwright/test` installed). An independent security review of this seam is
+required before sign-off. **Date:** 2026-09-20. **By:** S15 implementation pass.
+
 ## D-012 — Disable Better Auth account linking EXPLICITLY (security review of M2)
 
 **Decision:** Set `account.accountLinking.enabled = false` in `apps/web/app/lib/auth.ts`. An

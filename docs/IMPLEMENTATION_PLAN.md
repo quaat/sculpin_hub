@@ -28,7 +28,7 @@ their acceptance criteria. Live status is in [`STATUS.md`](STATUS.md).
 | M6  | OpenAI-compatible proxy / broker (fail-closed registry, streaming)              | M0, M5     | ✅ core (review PASS)        |
 | M7  | Usage metering, quota reservation, analytics/audit                              | M4, M6     | ⏳ quota + per-request usage events done (S13/D-023); analytics/audit surfaces next |
 | M8  | Azure deployment (Key Vault, managed identity, IaC)                             | M6         | pending                      |
-| M9  | Complete verification (security, E2E, ops readiness)                            | all        | pending                      |
+| M9  | Complete verification (security, E2E, ops readiness)                            | all        | ⏳ browser/control-plane E2E harness landed (S15/D-024, CI-run); security reviews + ops readiness pending |
 
 ## Acceptance criteria (per milestone)
 

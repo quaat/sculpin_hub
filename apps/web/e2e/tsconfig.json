@@ -1,0 +1,14 @@
+{
+  "//": "Dedicated tsconfig for the Playwright browser suite. It is EXCLUDED from the Next app tsconfig so a dev-sandbox `tsc`/build never requires @playwright/test (installed only in CI). Typecheck in CI with `tsc -p apps/web/e2e/tsconfig.json --noEmit` after `pnpm install` + `playwright install`.",
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts", "../playwright.config.ts"],
+  "exclude": ["../node_modules"]
+}

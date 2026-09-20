@@ -134,6 +134,23 @@ _Last updated: 2026-09-20_
   alias resolution wiring is Stage E (M6); admin UI is Stage G. Deferred: no catalogue outbox
   events / platform-audit table yet (traceability via created_by/updated_by/version).
 
+- **S15 (browser/control-plane E2E) — harness implemented (D-024):** a TEST-ONLY Better Auth session
+  seam lets a Playwright suite obtain a real session for a SEEDED persona without OAuth, while the
+  production auth path is byte-for-byte unchanged. Config gains a fail-closed guard (`e2eTestAuth`
+  truthy only when `E2E_TEST_AUTH="1"`; HARD FAILS if enabled under `NODE_ENV=production`; requires a
+  ≥32-char `E2E_SESSION_SEED_KEY`). The seam plugin (`apps/web/app/lib/e2e-auth-seam.ts`) exposes
+  EXACTLY `POST /e2e/sign-in`, re-checks the flag, constant-time compares `x-e2e-seed-key`, looks up an
+  EXISTING user only (never creates/provisions), and mints via `createSession` + `setSessionCookie`.
+  It is wired ONLY in `buildE2EAuthOptions` (which throws under production and unless the seam is
+  enabled); production `buildAuthOptions` has no seam and no `E2E_TEST_AUTH` branch. Harness files
+  (`playwright.config.ts`, `e2e/global-setup.ts` seeding via the REAL provisioning services +
+  repositories, `e2e/fixtures.ts`, and user/admin/unauthenticated `*.spec.ts` journeys) are in place;
+  Vitest excludes `e2e/**`. **Execution of the Playwright suite is a CI responsibility** (new
+  `browser-e2e` job: Postgres + migrations + Chromium + `E2E_TEST_AUTH=1` ephemeral env) — it was NOT
+  run in the sandbox (no browsers/Postgres/`@playwright/test`) and is NOT claimed to pass locally.
+  Verified in-sandbox: config **44** + web **158** unit tests pass (`e2e/**` excluded), config/web
+  typecheck + lint clean. Independent security review of the seam still pending (S15c).
+
 ## Foundation already in place (from prior branches)
 
 - Monorepo: `apps/{web,proxy,worker}`, `packages/{config,api-contracts,db,domain,jobs,observability}`.

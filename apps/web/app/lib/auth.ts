@@ -10,6 +10,7 @@ import {
   type ProvisioningTx,
 } from "./provisioning";
 import { reconcileAdminBootstrap } from "./admin-bootstrap";
+import { e2eSessionSeamPlugin } from "./e2e-auth-seam";
 
 /**
  * M2 identity slice — Better Auth control-plane configuration.
@@ -340,6 +341,37 @@ export function buildAuthOptions({
   } satisfies BetterAuthOptions;
 }
 
+/**
+ * TEST-ONLY variant of {@link buildAuthOptions} that appends the E2E
+ * session-seam plugin (S15 browser E2E). The PRODUCTION options are left
+ * byte-for-byte identical: this reuses `buildAuthOptions` unchanged and only
+ * REPLACES the plugins array, inserting the seam BEFORE `nextCookies()` so
+ * `nextCookies()` stays LAST (it must be last to bridge Set-Cookie into Next).
+ *
+ * Fails closed: requires `config.e2eTestAuth === true` and a seed key, and
+ * refuses under `NODE_ENV=production` (defense in depth on top of the config
+ * guard). Selected ONLY from `getAuth` when `config.e2eTestAuth` is true, so the
+ * seam is structurally unreachable in production.
+ */
+export function buildE2EAuthOptions(deps: AuthDependencies): BetterAuthOptions {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("e2e_auth_options_forbidden_in_production");
+  }
+  const { config } = deps;
+  if (config.e2eTestAuth !== true || !config.e2eSessionSeedKey) {
+    throw new Error("e2e_auth_options_require_enabled_seam");
+  }
+  const base = buildAuthOptions(deps);
+  return {
+    ...base,
+    // Rebuild the plugins array so `nextCookies()` remains LAST after the seam.
+    plugins: [
+      e2eSessionSeamPlugin({ seedKey: config.e2eSessionSeedKey }),
+      nextCookies(),
+    ],
+  } satisfies BetterAuthOptions;
+}
+
 let cached: Promise<ReturnType<typeof betterAuth>> | undefined;
 
 /**
@@ -355,7 +387,12 @@ export function getAuth(): Promise<ReturnType<typeof betterAuth>> {
   cached ??= (async () => {
     const deps = resolveAuthDependencies();
     await deps.database.ready();
-    return betterAuth(buildAuthOptions(deps));
+    // Production is UNCHANGED: only the E2E branch (gated by the fail-closed
+    // config flag) wires the test-only session seam.
+    const options = deps.config.e2eTestAuth
+      ? buildE2EAuthOptions(deps)
+      : buildAuthOptions(deps);
+    return betterAuth(options);
   })().catch((error: unknown) => {
     cached = undefined;
     throw error;

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthConfig } from "@sculpin/config";
 import type { Database } from "@sculpin/db";
-import { buildAuthOptions, withProvisioningTxCapture } from "./auth";
+import {
+  buildAuthOptions,
+  buildE2EAuthOptions,
+  withProvisioningTxCapture,
+} from "./auth";
 
 /**
  * Deterministic unit tests for the Better Auth options object. No DB, no
@@ -17,6 +21,7 @@ const config: AuthConfig = {
   githubClientId: "github-client-id",
   githubClientSecret: "github-client-secret",
   bootstrapAdminEmails: ["admin@example.com"],
+  e2eTestAuth: false,
 };
 
 // Minimal Database double; buildAuthOptions only needs `.prisma` to hand to the
@@ -97,6 +102,95 @@ describe("buildAuthOptions", () => {
       trustedOrigins: options.trustedOrigins,
     });
     expect(serialized).not.toContain(config.betterAuthSecret);
+  });
+});
+
+/**
+ * Collect every `endpoint.path` exposed by the plugins on a Better Auth options
+ * object. This is the AUTHORITATIVE source of the auth routes Better Auth mounts
+ * under `/api/auth`, so scanning it proves whether an `/e2e/` route exists.
+ */
+function collectPluginEndpointPaths(
+  options: ReturnType<typeof buildAuthOptions>,
+): string[] {
+  const paths: string[] = [];
+  for (const plugin of options.plugins ?? []) {
+    const endpoints = (plugin as { endpoints?: Record<string, unknown> })
+      .endpoints;
+    if (!endpoints) continue;
+    for (const endpoint of Object.values(endpoints)) {
+      const path = (endpoint as { path?: unknown }).path;
+      if (typeof path === "string") paths.push(path);
+    }
+  }
+  return paths;
+}
+
+describe("E2E session seam wiring (S15, structurally absent from production)", () => {
+  const seedKey = "e2e-session-seed-key-32chars-min-ok!!";
+  const e2eConfig: AuthConfig = { ...config, e2eTestAuth: true };
+  const e2eConfigWithKey: AuthConfig = {
+    ...config,
+    e2eTestAuth: true,
+    e2eSessionSeedKey: seedKey,
+  };
+
+  it("production buildAuthOptions exposes NO /e2e/ auth route", () => {
+    const options = buildAuthOptions({ config, database });
+    const paths = collectPluginEndpointPaths(options);
+    expect(paths.some((p) => p.includes("/e2e/"))).toBe(false);
+  });
+
+  it("buildE2EAuthOptions throws when the seam is not enabled", () => {
+    expect(() => buildE2EAuthOptions({ config, database })).toThrow(
+      /require_enabled_seam/,
+    );
+  });
+
+  it("buildE2EAuthOptions throws when the seed key is missing", () => {
+    expect(() => buildE2EAuthOptions({ config: e2eConfig, database })).toThrow(
+      /require_enabled_seam/,
+    );
+  });
+
+  it("buildE2EAuthOptions throws under NODE_ENV=production", () => {
+    const previous = process.env.NODE_ENV;
+    try {
+      // Cannot assign to NODE_ENV directly under strict types; mutate via record.
+      (process.env as Record<string, string>).NODE_ENV = "production";
+      expect(() =>
+        buildE2EAuthOptions({ config: e2eConfigWithKey, database }),
+      ).toThrow(/forbidden_in_production/);
+    } finally {
+      (process.env as Record<string, string | undefined>).NODE_ENV = previous;
+    }
+  });
+
+  it("buildE2EAuthOptions keeps nextCookies() LAST and adds exactly one /e2e/ POST route", () => {
+    const options = buildE2EAuthOptions({ config: e2eConfigWithKey, database });
+    const plugins = options.plugins ?? [];
+    // nextCookies must remain the LAST plugin (bridges Set-Cookie into Next).
+    const last = plugins[plugins.length - 1] as { id?: string };
+    expect(last.id).toBe("next-cookies");
+    // Exactly one /e2e/ route, mounted as POST at /e2e/sign-in.
+    const e2ePaths: { path: string; method: unknown }[] = [];
+    for (const plugin of plugins) {
+      const endpoints = (plugin as { endpoints?: Record<string, unknown> })
+        .endpoints;
+      if (!endpoints) continue;
+      for (const endpoint of Object.values(endpoints)) {
+        const path = (endpoint as { path?: string }).path;
+        const method = (endpoint as { options?: { method?: unknown } }).options
+          ?.method;
+        if (typeof path === "string" && path.includes("/e2e/")) {
+          e2ePaths.push({ path, method });
+        }
+      }
+    }
+    expect(e2ePaths).toHaveLength(1);
+    const only = e2ePaths[0];
+    expect(only?.path).toBe("/e2e/sign-in");
+    expect(only?.method).toBe("POST");
   });
 });
 

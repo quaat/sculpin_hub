@@ -33,6 +33,22 @@ export interface AuthConfig {
   githubClientId: string;
   githubClientSecret: string;
   bootstrapAdminEmails: readonly string[];
+  /**
+   * TEST-ONLY authentication seam (S15 browser E2E). `true` ONLY when
+   * `E2E_TEST_AUTH === "1"` AND `NODE_ENV !== "production"`. Enabling it under
+   * production is a HARD startup failure (see `parseWebAuthConfig`), so a
+   * production deployment that accidentally carries the flag fails closed rather
+   * than exposing the session-minting seam. When false the seam plugin is never
+   * constructed, so the `/api/auth/e2e/*` route is structurally absent.
+   */
+  e2eTestAuth: boolean;
+  /**
+   * SERVER-ONLY secret guarding the E2E session seam. Present (>= 32 chars) only
+   * when `e2eTestAuth` is true. Never reaches a browser bundle or client surface;
+   * the Playwright fixture sends it as the `x-e2e-seed-key` request header from a
+   * Node request context, never from page JS.
+   */
+  e2eSessionSeedKey?: string;
 }
 export type WebConfig = CommonConfig;
 export interface ProxyConfig extends CommonConfig {
@@ -203,6 +219,37 @@ function assertProductionAuthUrlSafety(
   }
 }
 
+/**
+ * Resolve the TEST-ONLY E2E auth seam flags. Fails closed:
+ *  - `E2E_TEST_AUTH === "1"` together with `NODE_ENV === "production"` is a HARD
+ *    error — this runs for EVERY web process, so a production deployment that
+ *    accidentally carries the flag fails startup rather than exposing the seam.
+ *  - When enabled, `E2E_SESSION_SEED_KEY` is REQUIRED and must be >= 32 chars.
+ *  - Any value other than exactly `"1"` disables the seam entirely; the seed key
+ *    is then ignored and returned as `undefined`.
+ */
+function resolveE2EAuth(
+  environment: RuntimeEnvironment,
+  input: NodeJS.ProcessEnv,
+): { e2eTestAuth: boolean; e2eSessionSeedKey?: string } {
+  const e2eTestAuth = input.E2E_TEST_AUTH === "1";
+  if (!e2eTestAuth) {
+    return { e2eTestAuth: false };
+  }
+  if (environment === "production") {
+    throw new Error(
+      "Invalid runtime configuration. E2E_TEST_AUTH must never be enabled in production.",
+    );
+  }
+  const seedKey = input.E2E_SESSION_SEED_KEY;
+  if (typeof seedKey !== "string" || seedKey.length < 32) {
+    throw new Error(
+      "Invalid runtime configuration. Check: E2E_SESSION_SEED_KEY (required, >= 32 characters, when E2E_TEST_AUTH=1).",
+    );
+  }
+  return { e2eTestAuth: true, e2eSessionSeedKey: seedKey };
+}
+
 export function parseWebAuthConfig(input: NodeJS.ProcessEnv): AuthConfig {
   const environment = parse(
     baseSchema.pick({ NODE_ENV: true }),
@@ -210,6 +257,7 @@ export function parseWebAuthConfig(input: NodeJS.ProcessEnv): AuthConfig {
   ).NODE_ENV;
   const value = parse(authSchema, input);
   assertProductionAuthUrlSafety(environment, value.BETTER_AUTH_URL);
+  const e2e = resolveE2EAuth(environment, input);
   return {
     betterAuthSecret: value.BETTER_AUTH_SECRET,
     betterAuthUrl: value.BETTER_AUTH_URL,
@@ -218,6 +266,7 @@ export function parseWebAuthConfig(input: NodeJS.ProcessEnv): AuthConfig {
     githubClientId: value.GITHUB_CLIENT_ID,
     githubClientSecret: value.GITHUB_CLIENT_SECRET,
     bootstrapAdminEmails: value.BOOTSTRAP_ADMIN_EMAILS,
+    ...e2e,
   };
 }
 export function parseProxyConfig(input: NodeJS.ProcessEnv): ProxyConfig {
