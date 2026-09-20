@@ -6,17 +6,25 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 const schema = "packages/db/prisma/schema.prisma";
 const check = process.argv.includes("--check");
+// Invoke Prisma through the Node binary directly (never `pnpm`) so formatting
+// works under an ambient engine mismatch (CLAUDE.md toolchain note).
+function prismaFormat(schemaPath) {
+  return exec(process.execPath, [
+    "node_modules/prisma/build/index.js",
+    "format",
+    "--schema",
+    schemaPath,
+  ]);
+}
 if (!check) {
-  await exec("pnpm", ["prisma", "format", "--schema", schema], {
-    stdio: "inherit",
-  });
+  await prismaFormat(schema);
 } else {
   const before = await readFile(schema, "utf8");
   const dir = await mkdtemp(join(tmpdir(), "sculpin-prisma-format-"));
   const copy = join(dir, "schema.prisma");
   try {
     await copyFile(schema, copy);
-    await exec("pnpm", ["prisma", "format", "--schema", copy]);
+    await prismaFormat(copy);
     const after = await readFile(copy, "utf8");
     if (before !== after) {
       console.error("Prisma schema is not formatted. Run pnpm prisma:format.");

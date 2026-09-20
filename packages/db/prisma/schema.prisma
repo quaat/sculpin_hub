@@ -81,26 +81,26 @@ enum PatStatus {
 }
 
 model User {
-  id                   String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  normalizedEmail      String                   @map("normalized_email") @db.VarChar(254)
-  displayName          String                   @map("display_name") @db.VarChar(120)
-  role                 PlatformRole             @default(user)
-  status               UserStatus               @default(active)
-  locale               String                   @default("en") @db.VarChar(16)
-  emailVerified        Boolean                  @default(false) @map("email_verified")
-  image                String?                  @db.VarChar(2048)
-  deactivatedAt        DateTime?                @map("deactivated_at") @db.Timestamptz(6)
-  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt            DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
-  version              Int                      @default(1)
-  externalIdentities   ExternalIdentity[]
-  memberships          OrganizationMembership[]
-  personalOrganization Organization?            @relation("PersonalOrganizationOwner")
-  auditEvents          AuditEvent[]
-  sessions             Session[]
-  catalogueEntriesCreated CatalogueEntry[]      @relation("CatalogueEntryCreatedBy")
-  catalogueEntriesUpdated CatalogueEntry[]      @relation("CatalogueEntryUpdatedBy")
-  personalAccessTokens PersonalAccessToken[]
+  id                      String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  normalizedEmail         String                   @map("normalized_email") @db.VarChar(254)
+  displayName             String                   @map("display_name") @db.VarChar(120)
+  role                    PlatformRole             @default(user)
+  status                  UserStatus               @default(active)
+  locale                  String                   @default("en") @db.VarChar(16)
+  emailVerified           Boolean                  @default(false) @map("email_verified")
+  image                   String?                  @db.VarChar(2048)
+  deactivatedAt           DateTime?                @map("deactivated_at") @db.Timestamptz(6)
+  createdAt               DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version                 Int                      @default(1)
+  externalIdentities      ExternalIdentity[]
+  memberships             OrganizationMembership[]
+  personalOrganization    Organization?            @relation("PersonalOrganizationOwner")
+  auditEvents             AuditEvent[]
+  sessions                Session[]
+  catalogueEntriesCreated CatalogueEntry[]         @relation("CatalogueEntryCreatedBy")
+  catalogueEntriesUpdated CatalogueEntry[]         @relation("CatalogueEntryUpdatedBy")
+  personalAccessTokens    PersonalAccessToken[]
 
   @@index([normalizedEmail], map: "idx_users_normalized_email")
   @@index([status], map: "idx_users_status")
@@ -132,19 +132,19 @@ model ExternalIdentity {
 }
 
 model Organization {
-  id                  String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  slug                String                   @unique @db.VarChar(63)
-  type                OrganizationType
-  personalOwnerUserId String?                  @map("personal_owner_user_id") @db.Uuid
-  personalOwner       User?                    @relation("PersonalOrganizationOwner", fields: [personalOwnerUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  status              OrganizationStatus       @default(active)
-  createdAt           DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
-  version             Int                      @default(1)
-  memberships         OrganizationMembership[]
-  auditEvents         AuditEvent[]
-  outboxEvents        OutboxEvent[]
-  subscriptions       Subscription[]
+  id                   String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug                 String                   @unique @db.VarChar(63)
+  type                 OrganizationType
+  personalOwnerUserId  String?                  @map("personal_owner_user_id") @db.Uuid
+  personalOwner        User?                    @relation("PersonalOrganizationOwner", fields: [personalOwnerUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  status               OrganizationStatus       @default(active)
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+  version              Int                      @default(1)
+  memberships          OrganizationMembership[]
+  auditEvents          AuditEvent[]
+  outboxEvents         OutboxEvent[]
+  subscriptions        Subscription[]
   personalAccessTokens PersonalAccessToken[]
 
   @@unique([personalOwnerUserId], map: "organizations_personal_owner_user_id_key")

@@ -61,8 +61,14 @@ await admin.connect();
 try {
   await admin.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
   const migrate = spawnSync(
-    "pnpm",
-    ["prisma", "migrate", "deploy", "--schema", schemaPath],
+    process.execPath,
+    [
+      "node_modules/prisma/build/index.js",
+      "migrate",
+      "deploy",
+      "--schema",
+      schemaPath,
+    ],
     {
       stdio: "inherit",
       env: { ...process.env, DATABASE_URL: testUrl.toString() },

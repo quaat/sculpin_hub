@@ -20,6 +20,17 @@ async function expectSqlFailure(client, sql, expected) {
 }
 
 const exec = promisify(execFile);
+const schemaPath = "packages/db/prisma/schema.prisma";
+// Invoke the Prisma CLI through the Node binary directly (never via `pnpm`) so
+// migration tests run even when the ambient pnpm/Node version does not match the
+// repo-pinned engines (CLAUDE.md toolchain note); mirrors the other runners.
+function prisma(args, env) {
+  return exec(
+    process.execPath,
+    ["node_modules/prisma/build/index.js", ...args],
+    { env },
+  );
+}
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) throw new Error("DATABASE_URL is required for migration tests.");
 const suffix = `${Date.now()}_${process.pid}`;
@@ -42,44 +53,24 @@ try {
     DATABASE_URL: testUrl.toString(),
     SHADOW_DATABASE_URL: shadowUrl.toString(),
   };
-  await exec("pnpm", ["db:migrate:deploy"], { env });
-  await exec("pnpm", ["db:migrate:deploy"], { env });
-  await exec(
-    "pnpm",
+  await prisma(["migrate", "deploy", "--schema", schemaPath], env);
+  await prisma(["migrate", "deploy", "--schema", schemaPath], env);
+  await prisma(["migrate", "status", "--schema", schemaPath], env);
+  await prisma(["validate", "--schema", schemaPath], env);
+  await prisma(["generate", "--schema", schemaPath], env);
+  await prisma(
     [
-      "prisma",
-      "migrate",
-      "status",
-      "--schema",
-      "packages/db/prisma/schema.prisma",
-    ],
-    { env },
-  );
-  await exec(
-    "pnpm",
-    ["prisma", "validate", "--schema", "packages/db/prisma/schema.prisma"],
-    { env },
-  );
-  await exec(
-    "pnpm",
-    ["prisma", "generate", "--schema", "packages/db/prisma/schema.prisma"],
-    { env },
-  );
-  await exec(
-    "pnpm",
-    [
-      "prisma",
       "migrate",
       "diff",
       "--from-migrations",
       "packages/db/prisma/migrations",
       "--to-schema-datamodel",
-      "packages/db/prisma/schema.prisma",
+      schemaPath,
       "--shadow-database-url",
       shadowUrl.toString(),
       "--exit-code",
     ],
-    { env },
+    env,
   );
   const test = new pg.Client({ connectionString: testUrl.toString() });
   await test.connect();
