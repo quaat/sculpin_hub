@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { ensureAdminPage } from "../admin-gate";
 import { ActionForm } from "../action-form";
 import { grantPlanAction, setSubscriptionStatusAction } from "../actions";
@@ -73,11 +74,15 @@ export default async function AdminSubscriptions() {
         </ActionForm>
       </section>
 
-      <section className="empty" aria-labelledby="usage-audit">
+      <section aria-labelledby="usage-audit">
         <h2 id="usage-audit">Usage &amp; audit</h2>
         <p>
-          Usage and audit views arrive in milestone S13. No usage or audit data
-          is available yet, and none is fabricated here.
+          Subscription grants and status changes are recorded as audit events.
+          Review them alongside aggregate usage on the{" "}
+          <Link className="text-link" href="/admin/audit">
+            Audit &amp; usage
+          </Link>{" "}
+          view.
         </p>
       </section>
     </main>

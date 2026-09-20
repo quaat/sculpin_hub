@@ -12,6 +12,7 @@ const sections = [
   ["Catalogue", "/admin/catalogue", "Publish or unpublish model catalogue entries."],
   ["Plans", "/admin/plans", "Create plans and manage their catalogue mapping."],
   ["Subscriptions", "/admin/subscriptions", "Grant plans and change subscription status."],
+  ["Audit", "/admin/audit", "Review recent control-plane audit events and usage."],
 ] as const;
 
 export default async function AdminHome() {
@@ -40,11 +41,14 @@ export default async function AdminHome() {
           ))}
         </div>
       </section>
-      <section className="empty" aria-labelledby="usage-audit">
+      <section aria-labelledby="usage-audit">
         <h2 id="usage-audit">Usage &amp; audit</h2>
         <p>
-          Usage and audit views arrive in milestone S13. No usage or audit data
-          is available yet, and none is fabricated here.
+          Review recent control-plane audit events and aggregate usage on the{" "}
+          <Link className="text-link" href="/admin/audit">
+            Audit &amp; usage
+          </Link>{" "}
+          view.
         </p>
       </section>
     </main>

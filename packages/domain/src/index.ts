@@ -1125,3 +1125,96 @@ export interface MintedPat {
   readonly record: PatRecord;
   readonly token: string;
 }
+
+// ---------------------------------------------------------------------------
+// §11 — minimum admin operational read views (audit + usage summary)
+//
+// READ-ONLY projections over the append-only `audit_events` table (§10) and the
+// per-request `usage_events` table (S13/D-023). No mutations, no audit written
+// for reads. Both source tables are GUARANTEED SAFE by their writers: an audit
+// summary NEVER carries a token/secret/hash/digest/OAuth credential/upstream
+// url/upstream key/prompt/response/upstream agent id (see the §10 writer
+// module-level rule), and a usage row carries only ids + `quotaCost` +
+// timestamp (no prompt/body/secret). These views therefore expose only fields
+// that are safe for an admin operational surface; they must NOT be widened to
+// select the raw `upstream_agent_id` or any credential-shaped column.
+// ---------------------------------------------------------------------------
+
+/**
+ * One recent audit row, projected for the admin operational view. Timestamps
+ * are exposed as ISO-8601 strings (server-serialized) so the value crosses the
+ * server/client boundary of a Server Component without a Date-serialization
+ * surprise. `beforeSummary` / `afterSummary` are the §10 writer's SAFE metadata
+ * snapshots verbatim (see the §10 security rule) — never a secret. Actor and
+ * organization display fields are resolved via LEFT JOIN and may be null (a
+ * platform-global event has no org; a system actor has no user row).
+ */
+export interface AuditLogEntryView {
+  readonly id: string;
+  /** ISO-8601 UTC timestamp of when the event occurred. */
+  readonly occurredAt: string;
+  readonly action: string;
+  readonly targetType: string;
+  readonly targetId: string;
+  /** The responsible human's user id, or null for a system-actor event. */
+  readonly actorUserId: string | null;
+  /** The responsible human's canonical email, or null (system actor / gone). */
+  readonly actorEmail: string | null;
+  /** The responsible human's display name, or null (system actor / gone). */
+  readonly actorDisplayName: string | null;
+  /** A trusted system component name, or null when a human acted. */
+  readonly systemActor: string | null;
+  /** The tenant org id, or null for a platform-global / cross-org event. */
+  readonly organizationId: string | null;
+  /** The tenant org slug, or null when the event is platform-global. */
+  readonly organizationSlug: string | null;
+  /**
+   * SAFE §10 metadata snapshot (see module rule); never a secret. `unknown`
+   * (which already subsumes `null`) because the summary is arbitrary safe JSON
+   * or absent.
+   */
+  readonly beforeSummary: unknown;
+  /** SAFE §10 metadata snapshot (see module rule); never a secret. */
+  readonly afterSummary: unknown;
+}
+
+/**
+ * Read-only repository over the append-only audit log. The implementation
+ * server-side CLAMPS `limit` (see the Postgres impl) so a caller cannot request
+ * unbounded rows. Rows are returned newest-first (uses
+ * `idx_audit_events_occurred_at`).
+ */
+export interface AuditLogRepository {
+  listRecent(limit: number): Promise<readonly AuditLogEntryView[]>;
+}
+
+/**
+ * A single organization's slice of the recent usage aggregate. `organizationId`
+ * may resolve to a null `organizationSlug` if the org row was removed; only ids
+ * + counts are exposed (usage rows carry no prompt/body/secret).
+ */
+export interface UsageSummaryByOrg {
+  readonly organizationId: string;
+  readonly organizationSlug: string | null;
+  readonly requestCount: number;
+  readonly totalQuotaCost: number;
+}
+
+/**
+ * Aggregate usage over the recent window: total request count and total quota
+ * cost across ALL rows in `usage_events`, plus a small top-N per-organization
+ * breakdown. Carries only counts + ids — no prompt, body, or secret.
+ */
+export interface UsageSummaryView {
+  readonly totalRequestCount: number;
+  readonly totalQuotaCost: number;
+  readonly topOrganizations: readonly UsageSummaryByOrg[];
+}
+
+/**
+ * Read-only repository over `usage_events`. Returns an aggregate summary; the
+ * per-org breakdown is bounded to a small top-N by the implementation.
+ */
+export interface UsageSummaryRepository {
+  summarize(topOrganizations?: number): Promise<UsageSummaryView>;
+}
