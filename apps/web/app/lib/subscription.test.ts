@@ -6,6 +6,7 @@ import type {
   SubscriptionRepository,
 } from "@sculpin/domain";
 import {
+  AdminGrantError,
   SelfServiceClaimError,
   SubscriptionInputError,
   adminGrantPlan,
@@ -325,9 +326,17 @@ describe("adminGrantPlan", () => {
   });
 
   it("grants as the acting admin — INCLUDING an unpublished/non-self-service plan", async () => {
-    // No plan lookup / self-service gate on the admin path: the admin grant
-    // deliberately bypasses `published`/`selfServiceEligible`. We prove that by
-    // never wiring a plan repo here and asserting the grant still forwards.
+    // The admin grant deliberately bypasses `published`/`selfServiceEligible`:
+    // we prove that by wiring a plan that is enabled + admin-grantable but NOT
+    // published / self-service, and asserting the grant still forwards.
+    const planRepository = mockPlanRepository();
+    planRepository.findById.mockResolvedValue(
+      planWith({
+        published: false,
+        selfServiceEligible: false,
+        adminGrantable: true,
+      }),
+    );
     const subscriptionRepository = mockSubscriptionRepository();
     subscriptionRepository.grantFromPlan.mockResolvedValue({
       ...sampleSubscription,
@@ -338,6 +347,7 @@ describe("adminGrantPlan", () => {
       { organizationId: ORG_ID, planId: PLAN_ID },
       {
         authz: authzFor("admin"),
+        planRepository: planRepository as unknown as PlanRepository,
         subscriptionRepository:
           subscriptionRepository as unknown as SubscriptionRepository,
       },
@@ -349,6 +359,82 @@ describe("adminGrantPlan", () => {
       PLAN_ID,
       ADMIN_ID,
     );
+  });
+
+  it("refuses a plan with adminGrantable=false (plan_not_admin_grantable, never grants)", async () => {
+    const planRepository = mockPlanRepository();
+    planRepository.findById.mockResolvedValue(
+      planWith({ adminGrantable: false }),
+    );
+    const subscriptionRepository = mockSubscriptionRepository();
+
+    let caught: unknown;
+    try {
+      await adminGrantPlan(
+        { organizationId: ORG_ID, planId: PLAN_ID },
+        {
+          authz: authzFor("admin"),
+          planRepository: planRepository as unknown as PlanRepository,
+          subscriptionRepository:
+            subscriptionRepository as unknown as SubscriptionRepository,
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AdminGrantError);
+    expect((caught as AdminGrantError).reason).toBe("plan_not_admin_grantable");
+    expect(subscriptionRepository.grantFromPlan).not.toHaveBeenCalled();
+  });
+
+  it("refuses a disabled plan even if admin-grantable (plan_not_admin_grantable, never grants)", async () => {
+    const planRepository = mockPlanRepository();
+    planRepository.findById.mockResolvedValue(
+      planWith({ enabled: false, adminGrantable: true }),
+    );
+    const subscriptionRepository = mockSubscriptionRepository();
+
+    let caught: unknown;
+    try {
+      await adminGrantPlan(
+        { organizationId: ORG_ID, planId: PLAN_ID },
+        {
+          authz: authzFor("admin"),
+          planRepository: planRepository as unknown as PlanRepository,
+          subscriptionRepository:
+            subscriptionRepository as unknown as SubscriptionRepository,
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AdminGrantError);
+    expect((caught as AdminGrantError).reason).toBe("plan_not_admin_grantable");
+    expect(subscriptionRepository.grantFromPlan).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown plan id (plan_not_available, never grants)", async () => {
+    const planRepository = mockPlanRepository();
+    planRepository.findById.mockResolvedValue(undefined);
+    const subscriptionRepository = mockSubscriptionRepository();
+
+    let caught: unknown;
+    try {
+      await adminGrantPlan(
+        { organizationId: ORG_ID, planId: PLAN_ID },
+        {
+          authz: authzFor("admin"),
+          planRepository: planRepository as unknown as PlanRepository,
+          subscriptionRepository:
+            subscriptionRepository as unknown as SubscriptionRepository,
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AdminGrantError);
+    expect((caught as AdminGrantError).reason).toBe("plan_not_available");
+    expect(subscriptionRepository.grantFromPlan).not.toHaveBeenCalled();
   });
 
   it("rejects a malformed org/plan id after admin gate, before granting", async () => {

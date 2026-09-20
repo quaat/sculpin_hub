@@ -1,5 +1,6 @@
 import {
   validatePlanInput,
+  validatePlanPatch,
   type Plan,
   type PlanInput,
   type PlanKind,
@@ -88,7 +89,9 @@ export class PostgresPlanRepository implements PlanRepository {
         input.adminGrantable ?? true,
         input.durationDays ?? null,
         input.requestQuota,
-        input.oneTimePerOrganization ?? false,
+        // Free trials default to one-time-per-organization so a tenant cannot
+        // re-claim a trial repeatedly; other kinds default to repeatable.
+        input.oneTimePerOrganization ?? input.kind === "free_trial",
         adminUserId,
       ],
     );
@@ -102,6 +105,9 @@ export class PostgresPlanRepository implements PlanRepository {
     patch: PlanPatch,
     adminUserId: string,
   ): Promise<Plan | undefined> {
+    // Fail closed on any out-of-range / malformed patch field before touching
+    // the DB (name/description/duration/quota bounds + boolean policy flags).
+    validatePlanPatch(patch);
     // Build a partial UPDATE that only touches provided fields. `durationDays`
     // accepts null to clear the window.
     const sets: string[] = [];

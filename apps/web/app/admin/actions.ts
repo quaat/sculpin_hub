@@ -6,6 +6,7 @@ import {
   DomainValidationError,
   type PlanInput,
   type PlanKind,
+  type PlanPatch,
   type SubscriptionStatus,
 } from "@sculpin/domain";
 import { AuthzError } from "../lib/session";
@@ -24,8 +25,10 @@ import {
   detachPlanCatalogueEntry,
   setPlanEnabled,
   setPlanPublished,
+  updatePlan,
 } from "../lib/plan-admin";
 import {
+  AdminGrantError,
   SubscriptionInputError,
   adminGrantPlan,
   adminSetSubscriptionStatus,
@@ -160,9 +163,20 @@ export async function createPlanAction(
   const requestQuotaRaw = str(formData, "requestQuota");
   const durationDaysRaw = str(formData, "durationDays");
   const selfServiceEligible = formData.get("selfServiceEligible") === "on";
+  const adminGrantable = formData.get("adminGrantable") === "on";
+  // A free_trial defaults to one-time-per-organization (enforced in the
+  // repository), but the admin can still opt a plan in explicitly via this box.
+  const oneTimePerOrganization =
+    formData.get("oneTimePerOrganization") === "on";
 
   if (!PLAN_KINDS.includes(kindRaw as PlanKind)) {
     return { ok: false, message: "Choose a valid plan kind." };
+  }
+  // An empty field coerces via Number("") to 0; require it explicitly so a
+  // direct server-action call (bypassing the browser `required`) cannot slip
+  // through with a silent quota of 0.
+  if (requestQuotaRaw.length === 0) {
+    return { ok: false, message: "Request quota is required." };
   }
   const requestQuota = Number(requestQuotaRaw);
   if (!Number.isInteger(requestQuota)) {
@@ -183,6 +197,8 @@ export async function createPlanAction(
     kind: kindRaw as PlanKind,
     requestQuota,
     selfServiceEligible,
+    adminGrantable,
+    ...(oneTimePerOrganization ? { oneTimePerOrganization } : {}),
     ...(description.length > 0 ? { description } : {}),
     ...(durationDays !== undefined ? { durationDays } : {}),
   };
@@ -197,6 +213,62 @@ export async function createPlanAction(
     return (
       forbiddenOrError(error) ?? { ok: false, message: "Unable to create plan." }
     );
+  }
+}
+
+/**
+ * Edit a plan's SAFE mutable fields. `key` and `kind` are immutable (identity /
+ * snapshot-affecting) and are never read here. This form is authoritative for
+ * the fields it renders: the three policy checkboxes are always applied from
+ * their submitted state, and an empty duration clears the window (null).
+ */
+export async function updatePlanAction(
+  formData: FormData,
+): Promise<ActionResult> {
+  const id = str(formData, "id");
+  const name = str(formData, "name");
+  const description = str(formData, "description");
+  const requestQuotaRaw = str(formData, "requestQuota");
+  const durationDaysRaw = str(formData, "durationDays");
+
+  if (requestQuotaRaw.length === 0) {
+    return { ok: false, message: "Request quota is required." };
+  }
+  const requestQuota = Number(requestQuotaRaw);
+  if (!Number.isInteger(requestQuota)) {
+    return { ok: false, message: "Request quota must be an integer." };
+  }
+  let durationDays: number | null = null;
+  if (durationDaysRaw.length > 0) {
+    const parsed = Number(durationDaysRaw);
+    if (!Number.isInteger(parsed)) {
+      return { ok: false, message: "Duration must be an integer number of days." };
+    }
+    durationDays = parsed;
+  }
+
+  const patch: PlanPatch = {
+    name,
+    description,
+    requestQuota,
+    durationDays,
+    selfServiceEligible: formData.get("selfServiceEligible") === "on",
+    adminGrantable: formData.get("adminGrantable") === "on",
+    oneTimePerOrganization: formData.get("oneTimePerOrganization") === "on",
+  };
+  try {
+    const updated = await updatePlan(id, patch);
+    revalidatePath("/admin/plans");
+    if (!updated) return { ok: false, message: "Plan not found." };
+    return { ok: true, message: "Plan updated." };
+  } catch (error) {
+    if (error instanceof PlanAdminInputError) {
+      return { ok: false, message: "Invalid plan id." };
+    }
+    if (error instanceof DomainValidationError) {
+      return { ok: false, message: error.message };
+    }
+    return forbiddenOrError(error) ?? { ok: false, message: "Unable to update plan." };
   }
 }
 
@@ -282,6 +354,18 @@ export async function grantPlanAction(
   } catch (error) {
     if (error instanceof DomainConflictError) {
       return { ok: false, message: "That plan is already claimed for this org." };
+    }
+    if (error instanceof AdminGrantError) {
+      return {
+        ok: false,
+        message:
+          error.reason === "plan_not_admin_grantable"
+            ? "That plan is not admin-grantable."
+            : "That plan is not available.",
+      };
+    }
+    if (error instanceof SubscriptionInputError) {
+      return { ok: false, message: "Invalid grant input." };
     }
     return forbiddenOrError(error) ?? { ok: false, message: "Unable to grant." };
   }

@@ -88,6 +88,23 @@ export class SubscriptionInputError extends Error {
   }
 }
 
+/**
+ * Thrown when an admin grant is refused for a reason other than a malformed id:
+ *   - `plan_not_available`        → the plan id does not resolve to any plan.
+ *   - `plan_not_admin_grantable`  → the plan exists but is not simultaneously
+ *     enabled + admin-grantable, so an admin MUST NOT grant it. Distinct from the
+ *     self-service gate: a plan can be admin-grantable without being
+ *     self-service, and vice versa.
+ */
+export class AdminGrantError extends Error {
+  readonly reason: "plan_not_available" | "plan_not_admin_grantable";
+  constructor(reason: "plan_not_available" | "plan_not_admin_grantable") {
+    super(reason);
+    this.name = "AdminGrantError";
+    this.reason = reason;
+  }
+}
+
 let defaultPlanRepositoryPromise: Promise<PlanRepository> | undefined;
 
 async function resolvePlanRepository(
@@ -240,6 +257,15 @@ export async function adminGrantPlan(
     !uuidPattern.test(input.planId)
   )
     throw new SubscriptionInputError("invalid_grant_input");
+  // Enforce the admin-grant policy explicitly here (grantFromPlan only checks
+  // `enabled`): the plan must exist, be enabled, AND be admin-grantable. This is
+  // independent of the self-service gate — an admin can grant an unpublished /
+  // non-self-service plan, but never one an admin was not permitted to grant.
+  const planRepository = await resolvePlanRepository(deps?.planRepository);
+  const plan = await planRepository.findById(input.planId);
+  if (!plan) throw new AdminGrantError("plan_not_available");
+  if (plan.enabled !== true || plan.adminGrantable !== true)
+    throw new AdminGrantError("plan_not_admin_grantable");
   const subscriptionRepository = await resolveSubscriptionRepository(
     deps?.subscriptionRepository,
   );

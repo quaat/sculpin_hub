@@ -18,6 +18,7 @@ import {
   validatePatName,
   validatePatScopeIds,
   validatePlanInput,
+  validatePlanPatch,
   validateQuotaAmount,
   PAT_MAX_SCOPES,
   PAT_PREFIX,
@@ -26,6 +27,7 @@ import {
   type CatalogueEntry,
   type CatalogueEntryInput,
   type PlanInput,
+  type PlanPatch,
   type Subscription,
   type SubscriptionStatus,
 } from "./index.js";
@@ -238,6 +240,44 @@ describe("validatePlanInput", () => {
     expect(() =>
       validatePlanInput({ ...validPlan, description: "d".repeat(2049) }),
     ).toThrow(DomainValidationError));
+});
+
+describe("validatePlanPatch", () => {
+  it("accepts an empty patch", () =>
+    expect(() => validatePlanPatch({})).not.toThrow());
+  it("accepts clearing the duration window with null", () =>
+    expect(() => validatePlanPatch({ durationDays: null })).not.toThrow());
+  it("accepts valid mutable fields", () =>
+    expect(() =>
+      validatePlanPatch({
+        name: "Renamed",
+        description: "New copy.",
+        requestQuota: 500,
+        durationDays: 90,
+        selfServiceEligible: true,
+        adminGrantable: false,
+        oneTimePerOrganization: true,
+      }),
+    ).not.toThrow());
+  it.each<[string, PlanPatch]>([
+    ["empty name", { name: "" }],
+    ["blank name", { name: "   " }],
+    ["name over 120", { name: "n".repeat(121) }],
+    ["description over 2048", { description: "d".repeat(2049) }],
+    ["control char in description", { description: "a\nb" }],
+    ["negative quota", { requestQuota: -1 }],
+    ["fractional quota", { requestQuota: 2.5 }],
+    ["quota over cap", { requestQuota: 1_000_001 }],
+    ["zero duration", { durationDays: 0 }],
+    ["fractional duration", { durationDays: 1.5 }],
+    ["duration over cap", { durationDays: 3651 }],
+    [
+      "non-boolean flag",
+      { selfServiceEligible: "yes" as unknown as boolean },
+    ],
+  ])("rejects %s", (_label, patch) =>
+    expect(() => validatePlanPatch(patch)).toThrow(DomainValidationError),
+  );
 });
 
 describe("isSubscriptionActive", () => {

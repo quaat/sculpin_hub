@@ -517,6 +517,65 @@ export function validatePlanInput(input: PlanInput): void {
     );
 }
 
+/**
+ * Validate a partial plan mutation (the safe, mutable fields). Mirrors the
+ * relevant bounds in {@link validatePlanInput} but only for fields present on
+ * the patch, so an admin edit can never write an out-of-range quota/duration, a
+ * too-long name/description, a control-character-laden string, or a non-boolean
+ * policy flag. `key` and `kind` are intentionally NOT patchable (identity /
+ * snapshot-affecting), so they are absent from {@link PlanPatch} and here.
+ */
+export function validatePlanPatch(patch: PlanPatch): void {
+  if (patch.name !== undefined) {
+    if (
+      typeof patch.name !== "string" ||
+      patch.name.length < 1 ||
+      patch.name.length > 120 ||
+      !displayNamePattern.test(patch.name)
+    )
+      throw new DomainValidationError(
+        "Plan name must be non-empty and at most 120 characters.",
+      );
+  }
+  if (patch.description !== undefined) {
+    if (
+      typeof patch.description !== "string" ||
+      patch.description.length > 2048 ||
+      controlCharPattern.test(patch.description)
+    )
+      throw new DomainValidationError(
+        "Plan description must be at most 2048 characters with no control characters.",
+      );
+  }
+  if (
+    patch.durationDays !== undefined &&
+    patch.durationDays !== null &&
+    (!Number.isInteger(patch.durationDays) ||
+      patch.durationDays < 1 ||
+      patch.durationDays > 3650)
+  )
+    throw new DomainValidationError(
+      "Plan duration must be an integer number of days between 1 and 3650.",
+    );
+  if (
+    patch.requestQuota !== undefined &&
+    (!Number.isInteger(patch.requestQuota) ||
+      patch.requestQuota < 0 ||
+      patch.requestQuota > 1_000_000)
+  )
+    throw new DomainValidationError(
+      "Plan request quota must be an integer between 0 and 1000000.",
+    );
+  for (const flag of [
+    "selfServiceEligible",
+    "adminGrantable",
+    "oneTimePerOrganization",
+  ] as const) {
+    if (patch[flag] !== undefined && typeof patch[flag] !== "boolean")
+      throw new DomainValidationError(`Plan ${flag} must be a boolean.`);
+  }
+}
+
 export type SubscriptionStatus =
   | "active"
   | "suspended"
