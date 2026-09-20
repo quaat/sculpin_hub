@@ -65,7 +65,7 @@ const completion = await client.chat.completions.create({
 });
 ```
 
-The Hub authenticates the PAT, checks an active subscription and atomically reserves quota, resolves the public alias to the upstream agent, injects its own upstream credential (the caller's token/cookies are never forwarded), and streams the response back byte-for-byte when `stream: true`. Deployment configures `SCULPIN_UPSTREAM_URL`, `SCULPIN_UPSTREAM_API_KEY`, and `PAT_HASH_SECRET` (see `.env.example`); the internal Sculpin URL and upstream key are never exposed to clients. See [`/documentation`](apps/web/app/documentation/page.tsx) for the full contract.
+The Hub authenticates the PAT, checks an active subscription and atomically reserves quota, resolves the public alias to the upstream agent, injects its own upstream credential (the caller's token/cookies are never forwarded), and streams the response back incrementally when `stream: true` — preserving SSE framing and ordering while rewriting the internal agent id in the `model` field back to the public alias (so it is not byte-for-byte) and failing closed on a malformed event. Deployment configures `SCULPIN_UPSTREAM_URL`, `SCULPIN_UPSTREAM_API_KEY`, and `PAT_HASH_SECRET` (see `.env.example`); the internal Sculpin URL and upstream key are never exposed to clients. See [`/documentation`](apps/web/app/documentation/page.tsx) for the full contract.
 
 ## Validate
 

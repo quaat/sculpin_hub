@@ -18,7 +18,9 @@ The end-to-end flow we are enabling:
 4. The Hub **authenticates** the PAT, **authorizes** it (entitlement + quota), **meters** the
    call, and **proxies** the accepted request to Sculpin — injecting the upstream credential,
    never forwarding the caller's PAT/cookies, never leaking the internal Sculpin URL.
-5. The Hub returns Sculpin's response (including SSE streaming) byte-for-byte.
+5. The Hub returns Sculpin's response (including SSE streaming), preserving framing and ordering but
+   rewriting the internal agent id in the `model` field back to the public alias (S9; not
+   byte-for-byte) and failing closed on a malformed body/event.
 
 This is a thin vertical slice across milestones **M6** (proxy), **M5** (PATs), **M3**
 (catalogue), and **M7** (metering). All work inherits the fail-closed security rules in
@@ -66,8 +68,10 @@ Replace the dev-only blind forwarder with the reviewed, fail-closed data plane.
 - Map the public model alias to the upstream agent id at the edge (thin, hard-coded until M3).
 
 **Acceptance:** unregistered `/v1/*` routes return the fail-closed error; the two real routes
-proxy successfully; SSE streams byte-for-byte; a test proves no caller PAT/cookie/Authorization
-is forwarded upstream and no internal URL appears in any client-visible surface.
+proxy successfully; SSE is relayed incrementally with framing/ordering preserved but the internal
+agent id rewritten to the public alias (not byte-for-byte, S9) and fail-closed on a malformed event;
+a test proves no caller PAT/cookie/Authorization is forwarded upstream and no internal URL appears in
+any client-visible surface.
 
 ### Phase B — PAT authentication (M5)
 

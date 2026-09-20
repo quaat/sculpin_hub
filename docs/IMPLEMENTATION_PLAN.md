@@ -47,8 +47,9 @@ their acceptance criteria. Live status is in [`STATUS.md`](STATUS.md).
   time verify, revocation prompt. Tests prove DB contents aren't usable as bearer creds and
   logs contain no token values. Security review passed.
 - **M6:** Default-DENY `/v1/*` registry; only confirmed Sculpin routes registered; upstream
-  credential injection centralized; SSE passthrough byte-for-byte; no PAT/cookie/Authorization
-  forwarded upstream; no internal URL leaked.
+  credential injection centralized; SSE relayed incrementally with framing/ordering preserved but the
+  internal agent id rewritten to the public alias (NOT byte-for-byte, S9) and fail-closed on a
+  malformed event; no PAT/cookie/Authorization forwarded upstream; no internal URL leaked.
 - **M7:** Usage events without secrets/prompts/bodies (DONE, S13/D-023: one `usage_events` row per
   granted reservation, written atomically in the same transaction as the quota UPDATE; none on
   denial); atomic quota under concurrency (tested at last-quota, incl. usage-rows == granted-count);

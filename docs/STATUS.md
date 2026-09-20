@@ -16,8 +16,15 @@ _Last updated: 2026-09-20_
   tiny request-header allowlist, injects `Authorization: Bearer ${SCULPIN_UPSTREAM_API_KEY}`, and
   projects responses onto a caller-safe allowlist (rules 3-4). Pipeline fails closed in order:
   PAT auth (opaque 401) → body validate (400) → entitlement (403) → PUBLISHED alias→agent (404 before
-  quota) → atomic `reserveQuota` (429 before any upstream call) → alias rewritten to the agent id →
-  byte-for-byte JSON/SSE passthrough with client-disconnect abort → opaque 502 on upstream failure.
+  quota) → atomic `reserveQuota` (429 before any upstream call) → public alias rewritten to the agent
+  id for the upstream call → on the RESPONSE the agent id is rewritten BACK to the public alias, so the
+  relay is NOT byte-for-byte (S9). **Fail-closed success path (S7):** a non-streaming body or SSE
+  `data:` event that is not a well-formed JSON object is NEVER relayed verbatim; the SSE transform is
+  incremental (no whole-stream buffering) and, on a malformed event, emits a single sanitized error +
+  `data: [DONE]` then drops the rest. A bounded time-to-first-headers aborts a hung upstream → opaque
+  **504**; a non-2xx upstream response or a failed body rewrite → opaque **502**; a genuine client
+  disconnect (`reply.raw` close with `writableFinished === false`) propagates to abort the upstream run
+  and writes no synthetic body to the gone socket.
   `/v1/models` serves ONLY Hub published aliases (`listPublishedModels`, never the upstream id).
   `createSecureProductionProxyServer` wires it in `main.ts`.
 - **M7 (usage metering / quota):** ⏳ partial — atomic quota reservation is live and enforced in the
@@ -203,12 +210,13 @@ centralized credential injection in M6/M7 — NOT as an unauthenticated intermed
 
 ## Baseline verification (2026-09-20)
 
-- `prisma:generate`: OK. `tsc --noEmit` clean across domain/config/api-contracts/db + web + proxy.
-  Unit tests green across packages; web package **77/77** under its own config (auth 13,
-  session/authz 13, catalogue 10, entitlement 7, pat 9, admin-bootstrap 7, provisioning 8, app 5,
-  health 3, next.config 2); domain **63/63** (adds PAT format/name); db **20/20** (index 9, pat 11);
-  api-contracts **7/7** (adds the M6 data-plane error builders + chat schema); proxy **47/47**
-  (data-plane 12, server 20, errors 8, upstream 4, shutdown 3).
+- `prisma:generate`: OK. `tsc --noEmit` clean across domain/config/api-contracts/db + web + proxy;
+  eslint clean. Deterministic unit tests re-run 2026-09-20 and green across packages: web **161**,
+  domain **116**, config **44**, api-contracts **7**, db unit **27** (56 integration skipped —
+  Postgres-gated), proxy **79** (rewrite 18, data-plane 22, server 20, errors 8, cancellation 4,
+  upstream 4, shutdown 3; the 12 `proxy.e2e.test.ts` cases are Postgres-gated and skipped). The
+  proxy suite grew with the S7 fail-closed alias rewrite (`rewrite.test.ts`) and the real-socket S6/S10
+  cancellation tests (`cancellation.test.ts`).
   Integration tests require Compose Postgres (run via `run-db-integration.mjs` with an ephemeral DB;
   stable across repeated runs, including `pat.integration.test.ts` (6),
   `subscription.integration.test.ts` (now **9** — adds usage-event assertions: a granted reservation
@@ -218,18 +226,26 @@ centralized credential injection in M6/M7 — NOT as an unauthenticated intermed
   proxy-projection test)).
   `db:migration:test` drift-free. Note: the outbox suite now clears `outbox_events` in its
   `beforeAll` to own the table (fixes a pre-existing cross-suite ordering flake; see D-016).
-- **Stage F end-to-end (D-018; expanded S14):** `pnpm test:e2e` (`scripts/run-proxy-e2e.mjs`,
-  ephemeral DB) drives the real secure proxy with the **stock `openai` SDK** (7.20.0) against a fake
-  in-process Sculpin — **10 cases**: lists only the published alias, non-stream + SSE chat pass
-  through, unknown model → 404 and drained quota → 429 (neither calls upstream), bogus PAT → 401, and
-  the fake Sculpin sees the Hub bearer + rewritten agent id but NEITHER the caller PAT NOR cookies.
-  **S14 adds:** a revoked PAT → 401 immediately; a PAT scoped away from the alias → 404 without an
-  upstream call; conversation isolation proven at the SDK edge (a caller-forged
-  `x-exodus-conversation-id` + `x-agent-platform-include-metadata` are never relayed upstream, and the
-  upstream conversation/`server` response headers are never returned to the client); and the S13
-  metering proof — a served request writes exactly one `usage_events` row (correct catalogue-entry id,
-  PAT ROW id, `quota_cost=1`, no secret) while a 404 writes none. The suite is `RUN_PROXY_E2E`-guarded
-  (skipped/offline in the normal proxy unit run: 67 pass, 10 skipped).
+- **Stage F end-to-end (D-018; expanded S14; rebuilt around D-019):** `pnpm test:e2e`
+  (`scripts/run-proxy-e2e.mjs`, ephemeral DB) drives the real secure proxy with the **stock `openai`
+  SDK** (7.20.0) against a fake in-process Sculpin — **12 cases**. Entitlement is now constructed the
+  way production does (D-019, no auto-trial): `plan.create` → `attachCatalogueEntry` →
+  `subscription.grantFromPlan` (which snapshots the offering set). Cases: the seeded free-trial plan
+  fixture (fixed uuid, quota 200, published + self-service, one-time, zero offerings) matches the
+  migration; lists only the published alias; non-stream + SSE chat pass through with the agent id
+  rewritten back to the alias; **a provisioned tenant that never claims a plan is denied 403
+  `no_active_subscription` on BOTH the models and chat paths (the load-bearing D-019 no-auto-trial
+  proof)**; unknown model → 404; a separate active-but-drained subscription → 429 (distinct from the
+  403 no-sub case); bogus PAT → 401; revoked PAT → 401 immediately; a PAT scoped away from the alias →
+  404. **Every pre-dispatch denial (401/403/404/429) asserts the fake Sculpin request count is
+  unchanged — no unauthorized request ever reaches the upstream.** The fake Sculpin sees the Hub bearer
+  + rewritten agent id but NEITHER the caller PAT NOR cookies; conversation isolation is proven at the
+  SDK edge (a caller-forged `x-exodus-conversation-id` + `x-agent-platform-include-metadata` are never
+  relayed upstream, and the upstream conversation/`server` response headers are never returned); and
+  the S13 metering proof — a served request writes exactly one `usage_events` row (correct
+  catalogue-entry id, PAT ROW id, `quota_cost=1`, no secret) while a 404 writes none. The suite is
+  `RUN_PROXY_E2E`-guarded (skipped/offline in the normal proxy unit run: 79 pass, 12 skipped) and is
+  proven only in CI (needs Postgres).
 - **Env caveat:** the sandbox pins Node to v26 while the repo targets `22.22.2`. `turbo` fails
   with "cannot find package manager binary" until the nvm `v22.22.2/bin` dir is on `PATH`
   (which supplies a real `pnpm` shim); with that prefix the standard `pnpm lint|typecheck|test`

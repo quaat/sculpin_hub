@@ -158,7 +158,12 @@ endpoint from the OpenAI `/v1/models` — do not confuse them.
 
 ---
 
-## 5. Streaming semantics (SSE) — must pass through byte-for-byte
+## 5. Streaming semantics (SSE) — framing/ordering preserved, model id rewritten
+
+> Hub relay policy: the Hub preserves this exact framing and event ordering but is NOT a byte-for-byte
+> passthrough — it rewrites the internal agent id in each JSON `data:` event's `model` field back to
+> the public alias and fails closed on a malformed event (S9). The upstream format below is what
+> Sculpin emits.
 
 - Enabled by `stream: true`. Response is `StreamingResponse` with
   `media_type="text/event-stream"` (`openai_compat.py:362-366`).

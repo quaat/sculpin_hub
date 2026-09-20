@@ -293,9 +293,14 @@ handling isolated to a single module. This resolves Phase A/B/D of the "next up"
    opaque 401, [[D-016]]) → validate body
    (400) → entitlement active (403, [[D-015]]) → resolve PUBLISHED alias→agent (404 BEFORE quota, so
    an unknown model never burns budget, [[D-014]]) → atomic `reserveQuota` (429 BEFORE any upstream
-   call, [[D-015]] rule 6) → rewrite `model` to the upstream agent id → call upstream → byte-for-byte
-   passthrough (JSON or SSE) via `Readable.fromWeb`, propagating client disconnect to an
-   `AbortController`. Any upstream throw → opaque 502 with no internal detail.
+   call, [[D-015]] rule 6) → rewrite `model` to the upstream agent id → call upstream → on the RESPONSE
+   rewrite the agent id BACK to the public alias (S9; NOT byte-for-byte) and strip `exodus` metadata,
+   failing CLOSED when the body/SSE `data:` event is not a well-formed JSON object. SSE uses an
+   incremental `Readable.fromWeb` transform (no whole-stream buffering) and, on a malformed event,
+   emits a single sanitized error + `data: [DONE]` then drops the rest. A genuine client disconnect
+   propagates to an `AbortController` to abort the upstream run; a bounded time-to-first-headers timeout
+   → opaque **504**; any non-2xx upstream response, a failed body rewrite, or any upstream throw →
+   opaque **502** with no internal detail.
 
 4. **`/v1/models` serves the Hub catalogue, not the upstream.** `listPublishedModels` selects only
    `public_alias` + `created_at` (never `upstream_agent_id`) and feeds `toModelList`, so the OpenAI
