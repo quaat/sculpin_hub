@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { PrimaryNav } from "./nav";
 import "./styles.css";
 export const metadata: Metadata = {
   title: {
@@ -8,9 +9,13 @@ export const metadata: Metadata = {
   },
   description: "Managed access to Sculpin products and agents.",
 };
-const links = [
+
+// The header/footer nav is personalized from the server session, so the shared
+// layout must be rendered per-request rather than statically cached.
+export const dynamic = "force-dynamic";
+
+const footerLinks = [
   ["Products", "/products"],
-  ["Agents", "/products#agents"],
   ["Pricing", "/pricing"],
   ["Documentation", "/documentation"],
 ] as const;
@@ -32,13 +37,7 @@ export default function RootLayout({
             <span aria-hidden="true">S</span> Sculpin{" "}
             <strong>Knowledge Hub</strong>
           </Link>
-          <nav aria-label="Primary navigation">
-            {links.map(([label, href]) => (
-              <Link key={label} href={href}>
-                {label}
-              </Link>
-            ))}
-          </nav>
+          <PrimaryNav />
           <Link className="button small" href="/dashboard">
             Dashboard
           </Link>
@@ -50,13 +49,13 @@ export default function RootLayout({
             <p>Secure, managed access to Sculpin products and agents.</p>
           </div>
           <nav aria-label="Footer navigation">
-            {links.map(([label, href]) => (
+            {footerLinks.map(([label, href]) => (
               <Link key={label} href={href}>
                 {label}
               </Link>
             ))}
           </nav>
-          <small>Foundation preview — services are not yet enabled.</small>
+          <small>Secure, managed access to Sculpin products and agents.</small>
         </footer>
       </body>
     </html>

@@ -2,12 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import HomePage from "./page";
-import Products from "./products/page";
 import Pricing from "./pricing/page";
+import { ProductsView } from "./products/products-view";
 describe("public pages", () => {
   it.each([
     ["home", <HomePage />],
-    ["products", <Products />],
+    ["products", <ProductsView models={[]} />],
     ["pricing", <Pricing />],
   ])("renders the %s page", (_name, page) => {
     expect(renderToStaticMarkup(page)).toContain("<main");

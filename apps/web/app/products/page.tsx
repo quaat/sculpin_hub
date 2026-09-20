@@ -1,31 +1,15 @@
 import type { Metadata } from "next";
-import { previews } from "../content";
+import { listPublicModels } from "../lib/catalogue";
+import { ProductsView } from "./products-view";
+
 export const metadata: Metadata = { title: "Products" };
-export default function Products() {
-  return (
-    <main id="main">
-      <section className="page-hero">
-        <p className="eyebrow">Presentation catalog</p>
-        <h1>Explore Sculpin possibilities</h1>
-        <p className="lede">
-          These cards demonstrate the intended catalog experience. They are not
-          persisted products and cannot be subscribed to or invoked.
-        </p>
-      </section>
-      <section id="agents" aria-label="Product and agent previews">
-        <div className="cards">
-          {previews.map((item) => (
-            <article className="card" key={item.name}>
-              <span className="tag">{item.kind}</span>
-              <h2>{item.name}</h2>
-              <p>{item.text}</p>
-              <p className="muted">
-                Availability and API compatibility are not yet certified.
-              </p>
-            </article>
-          ))}
-        </div>
-      </section>
-    </main>
-  );
+
+// The published catalogue is read fresh from the DB on every request.
+export const dynamic = "force-dynamic";
+
+export default async function Products() {
+  // Public (not auth-gated): exposes only the client-safe `PublicModel`
+  // projection (alias/displayName/description) — never the upstream agent id.
+  const models = await listPublicModels();
+  return <ProductsView models={models} />;
 }
