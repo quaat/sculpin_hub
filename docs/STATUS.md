@@ -33,8 +33,11 @@ _Last updated: 2026-09-20_
   the granted quota UPDATE (on grant only, never on denial), carrying NO secret/prompt/body — only the
   org/subscription/catalogue-entry/PAT-row ids, the safe request id, and the quota cost. The
   concurrent last-quota stampede test now also asserts usage-row count == granted count. Migration
-  `20260920200000_usage_events`. Remaining M7 tail is the analytics/admin READ surfaces (out of scope
-  for S13, YAGNI).
+  `20260920200000_usage_events`. **Minimum admin READ surfaces now exist (S18/§11):** a
+  `requireAdmin`-gated `/admin/audit` renders a recent append-only audit log + a usage summary
+  (total request count, total quota cost, top organizations) via `PostgresAuditLogRepository` /
+  `PostgresUsageSummaryRepository` with server-clamped limits; the upstream agent id is never
+  selected. Remaining M7 tail is only richer analytics/charts (deferred, YAGNI).
 
 - **M0 (Sculpin discovery):** ✅ complete — [`SCULPIN_INTEGRATION.md`](SCULPIN_INTEGRATION.md)
   written from source-only investigation of the read-only upstream. Key findings:
@@ -172,6 +175,38 @@ _Last updated: 2026-09-20_
   lint clean. The browser journey (`e2e/user-journey.spec.ts`) asserts the Quick-start snippets and
   the no-leak surface; its execution remains the CI `browser-e2e` job's responsibility.
 
+- **S18 (final closure pass before live E2E, 2026-09-20):** a targeted pass closing control-plane,
+  deterministic-test, audit and demo-readiness gaps only — NO architecture change; the secure data
+  plane is untouched. Deltas:
+  - **Deterministic fake Sculpin discovery for Playwright (§2):** `e2e/fake-sculpin.ts` runs as its
+    own Playwright `webServer`; the app reaches it over the REAL discovery adapter (no mocked
+    `discoverSculpinAgents`). Exposes `GET /v1/models` (Bearer-gated) + `/health`.
+  - **Real-flow admin journey (§3):** `e2e/admin-journey.spec.ts` walks discover → bind alias to a
+    STABLE agent → publish entry → create plan → attach offering → publish → user sees/claims. The
+    internal upstream agent id never reaches the public surface.
+  - **PAT scoping as a user feature (§4):** `/account/tokens` mint offers scope modes (all / selected)
+    over the caller's published + entitled offerings; the server re-resolves public aliases.
+  - **Plan-policy semantics + `validatePlanPatch` (§5)** and **catalogue access instructions (§6):**
+    admin-authored per-offering instructions shown to entitled users on the Connect page.
+  - **`HUB_PUBLIC_URL` points at the proxy origin `:3001` (§7)** so copy-paste snippets hit the broker.
+  - **Genuinely incremental SSE + full proxy authz matrix E2E (§8/§9)** with the stock OpenAI SDK.
+  - **Control-plane audit events (§10):** single-choke-point `insertAuditEvent`
+    (`packages/db/src/audit.ts`) writes an append-only row IN the mutation's transaction; summaries
+    carry only SAFE metadata (never token/secret/digest/OAuth/upstream url/key/prompt/response/
+    upstream_agent_id); no-op mutations write no row. Migration
+    `20260921120000_audit_platform_global_events` allows platform-global rows (`organization_id`
+    NULL, admin actor) via a guard CHECK, adds an append-only trigger + `occurred_at DESC` index.
+  - **Minimum admin READ views (§11):** `/admin/audit` (see M7 note).
+  - **Honest demo messaging (§12)** on `/`, `/dashboard`, `/pricing`; **corrected Connect snippets
+    (§13)** (Python reads `os.environ["SCULPIN_HUB_PAT"]`; access instructions render only when set;
+    the per-agent Connect page fails closed via `notFound()` for unpublished aliases).
+  - **KNOWN STALE COMMENT (flagged, deliberately NOT edited):** the header comment in the applied
+    migration `20260919170000_subscriptions/migration.sql` still says every personal tenant is
+    provisioned with a `trial`. That was superseded by **D-019** (no auto-trial; entitlement requires
+    an EXPLICIT plan claim). The comment is left as-is because the migration is already applied and
+    its file bytes are checksum-tracked by Prisma — editing it would trip `migrate deploy` on any DB
+    that ran it. D-019, the code, and this status are authoritative; the comment is frozen history.
+
 ## Foundation already in place (from prior branches)
 
 - Monorepo: `apps/{web,proxy,worker}`, `packages/{config,api-contracts,db,domain,jobs,observability}`.
@@ -186,8 +221,9 @@ _Last updated: 2026-09-20_
 
 ## Explicitly NOT enabled yet
 
-Usage analytics/admin READ surfaces (M7 tail; per-request usage events themselves ARE now recorded —
-S13/D-023), Redis enforcement, Azure infra. (Authentication,
+Richer usage analytics/charts (M7 tail; per-request usage events ARE recorded — S13/D-023 — and a
+minimum admin audit-log + usage-summary READ surface at `/admin/audit` is live per S18/§11), Redis
+enforcement, Azure infra. (Authentication,
 OAuth callbacks, sessions, and admin bootstrap are live per M2; catalogue/subscriptions/PATs per
 M3/M4/M5; the production `/v1/models` + `/v1/chat/completions` broker with PAT auth, entitlement +
 atomic quota gating, and centralized upstream-credential injection is live per M6/D-017. The
@@ -274,8 +310,9 @@ across M3/M5/M6/M7:
   EXPLICIT plan claim + per-subscription snapshot, not a trial auto-granted on provisioning.)_
 - **Phase D — metering + atomic quota (M7).** ✅ core implemented (S13/D-023): atomic quota
   reservation (tested at last quota under concurrency) now also writes a per-request `usage_events`
-  row in the SAME transaction on grant — no secrets/prompts/bodies. Remaining tail: analytics/admin
-  READ surfaces (out of scope for S13).
+  row in the SAME transaction on grant — no secrets/prompts/bodies. A minimum admin READ surface
+  (`/admin/audit`: recent audit log + usage summary) is live per S18/§11; remaining tail is richer
+  analytics/charts only.
 
 No open blockers: the Sculpin tenant-mapping decision that shapes Phase C is **resolved** by
 D-008 (single shared upstream credential; admin-curated public-alias→agent map).
