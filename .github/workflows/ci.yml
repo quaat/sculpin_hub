@@ -84,6 +84,14 @@ jobs:
       # PAT minting is exercised by the user journey; keyed HMAC secret (>=32 chars).
       PAT_HASH_SECRET: ci-e2e-pat-hash-secret-not-a-real-secret-0123456789
       PAT_HASH_KEY_VERSION: "1"
+      # Sculpin discovery runs over the REAL adapter against a deterministic FAKE
+      # upstream (apps/web/e2e/fake-sculpin.ts), started by Playwright on this
+      # port. Both the fake server and the Next process share this ephemeral,
+      # non-secret discovery credential. The test process also reads these to
+      # assert they never leak into any client-visible surface.
+      SCULPIN_FAKE_PORT: "3211"
+      SCULPIN_UPSTREAM_URL: http://127.0.0.1:3211
+      SCULPIN_DISCOVERY_API_KEY: ci-e2e-fake-discovery-key-not-a-real-secret
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

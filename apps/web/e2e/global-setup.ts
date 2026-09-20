@@ -8,6 +8,7 @@ import {
   personalOrganizationSlug,
   provisionPersonalTenant,
 } from "../app/lib/provisioning";
+import { FAKE_SECONDARY_AGENT_ID } from "./fake-sculpin";
 
 /**
  * S15 E2E global setup (SERVER-SIDE only — has DB + secret access).
@@ -23,8 +24,12 @@ import {
  *    the USER catalogue and claim journeys have real, entitled data.
  *
  * Sessions are NOT minted here — each test mints its own via the seam endpoint
- * (`fixtures.ts`). Sculpin discovery is a deterministic mock at the app boundary
- * (`app/lib/discovery.ts` accepts an injected fetch); no live Sculpin call.
+ * (`fixtures.ts`). Sculpin discovery is NOT mocked: a deterministic fake Sculpin
+ * HTTP server (`e2e/fake-sculpin.ts`) runs as its own Playwright `webServer`, and
+ * the Next process reaches it over the real discovery adapter — so no live
+ * Sculpin call is made, but the real credential-injecting code path is exercised.
+ * The seeded offering binds to a stable agent id the fake server actually serves,
+ * so admin drift detection sees no drift.
  *
  * The ADMIN persona's email is expected to be in `BOOTSTRAP_ADMIN_EMAILS` for
  * the E2E environment; we still set `role='admin'` directly here so the persona
@@ -51,7 +56,10 @@ export const PERSONAS = {
 
 export const SEEDED_CATALOGUE = {
   publicAlias: "e2e-alias",
-  upstreamAgentId: "internal-sculpin-agent-do-not-leak",
+  // A STABLE (uuid-form) agent the fake Sculpin upstream actually serves, so the
+  // seeded offering maps to a discoverable agent and admin drift stays empty.
+  // Still admin-only; it must never appear in any client-visible surface.
+  upstreamAgentId: FAKE_SECONDARY_AGENT_ID,
   displayName: "E2E Model",
   description: "Deterministic E2E catalogue entry.",
 } as const;

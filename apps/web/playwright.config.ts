@@ -18,6 +18,18 @@ import { defineConfig, devices } from "@playwright/test";
 const PORT = Number(process.env.E2E_WEB_PORT ?? "3210");
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
+// The fake Sculpin upstream (real HTTP server, not a mock) runs on its own port
+// so the app's discovery adapter makes a genuine round-trip. The Next process is
+// pointed at this origin via SCULPIN_UPSTREAM_URL below, and both processes share
+// the same ephemeral discovery credential.
+const FAKE_SCULPIN_PORT = Number(process.env.SCULPIN_FAKE_PORT ?? "3211");
+const FAKE_SCULPIN_URL = `http://127.0.0.1:${FAKE_SCULPIN_PORT}`;
+// Ephemeral, run-scoped discovery credential. Explicit CI override wins; the
+// default keeps a local `E2E_TEST_AUTH=1` invocation self-contained. It is NEVER
+// a real Sculpin key — the upstream on the other end is the fake server.
+const FAKE_DISCOVERY_KEY =
+  process.env.SCULPIN_DISCOVERY_API_KEY ?? "e2e-fake-discovery-key-not-a-secret";
+
 // Guard: only run when explicitly enabled. When disabled we still export a valid
 // config (testDir with zero matching runs) so `playwright test` is a no-op and a
 // mis-fire never fails CI's non-E2E lanes.
@@ -59,24 +71,44 @@ export default defineConfig({
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
   ],
   webServer: enabled
-    ? {
-        // Boot Next in E2E mode. The env carries the test-only seam flag + seed
-        // key, a test DATABASE_URL, dummy OAuth ids (no live provider calls),
-        // and the admin persona in BOOTSTRAP_ADMIN_EMAILS.
-        command: "node ./node_modules/next/dist/bin/next dev -p " + PORT,
-        url: BASE_URL,
-        reuseExistingServer: false,
-        timeout: 120_000,
-        env: {
-          NODE_ENV: "test",
-          E2E_TEST_AUTH: "1",
-          E2E_SESSION_SEED_KEY: requireSeedKey(),
-          BETTER_AUTH_URL: BASE_URL,
-          // The rest (DATABASE_URL, BETTER_AUTH_SECRET, GOOGLE_*/GITHUB_*,
-          // BOOTSTRAP_ADMIN_EMAILS, PAT_HASH_SECRET, HUB_PUBLIC_URL,
-          // SCULPIN_*_URL/KEY) are supplied by the CI job environment and
-          // inherited here.
+    ? [
+        {
+          // The deterministic fake Sculpin upstream. Started BEFORE Next so the
+          // discovery adapter's real HTTP call has something to reach. Readiness
+          // is polled on the unauthenticated /health route.
+          command:
+            "node --experimental-strip-types ./e2e/fake-sculpin.ts",
+          url: `${FAKE_SCULPIN_URL}/health`,
+          reuseExistingServer: false,
+          timeout: 30_000,
+          env: {
+            SCULPIN_FAKE_PORT: String(FAKE_SCULPIN_PORT),
+            SCULPIN_DISCOVERY_API_KEY: FAKE_DISCOVERY_KEY,
+          },
         },
-      }
+        {
+          // Boot Next in E2E mode. The env carries the test-only seam flag + seed
+          // key, and points discovery at the fake upstream over the real adapter
+          // (SCULPIN_UPSTREAM_URL + a matching SCULPIN_DISCOVERY_API_KEY). A test
+          // DATABASE_URL, dummy OAuth ids (no live provider calls), and the admin
+          // persona in BOOTSTRAP_ADMIN_EMAILS come from the CI job env.
+          command: "node ./node_modules/next/dist/bin/next dev -p " + PORT,
+          url: BASE_URL,
+          reuseExistingServer: false,
+          timeout: 120_000,
+          env: {
+            NODE_ENV: "test",
+            E2E_TEST_AUTH: "1",
+            E2E_SESSION_SEED_KEY: requireSeedKey(),
+            BETTER_AUTH_URL: BASE_URL,
+            // Real discovery adapter, fake upstream on the other end of the socket.
+            SCULPIN_UPSTREAM_URL: FAKE_SCULPIN_URL,
+            SCULPIN_DISCOVERY_API_KEY: FAKE_DISCOVERY_KEY,
+            // The rest (DATABASE_URL, BETTER_AUTH_SECRET, GOOGLE_*/GITHUB_*,
+            // BOOTSTRAP_ADMIN_EMAILS, PAT_HASH_SECRET, HUB_PUBLIC_URL) are
+            // supplied by the CI job environment and inherited here.
+          },
+        },
+      ]
     : undefined,
 });
