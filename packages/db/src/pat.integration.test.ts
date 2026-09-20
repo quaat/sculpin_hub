@@ -42,6 +42,7 @@ suite("personal access token service", () => {
         displayName: `Scope ${seq}`,
       },
       ownerUserId,
+      `req-pat-scope-${seq}`,
     );
     return entry.id;
   }
@@ -74,6 +75,7 @@ suite("personal access token service", () => {
     const { token, record } = await service.mint({
       userId,
       organizationId,
+      requestId: "req-mint",
       name: "CI laptop",
     });
     const parsed = parsePatToken(token);
@@ -105,6 +107,7 @@ suite("personal access token service", () => {
     const { token, record } = await service.mint({
       userId,
       organizationId,
+      requestId: "req-mint",
       name: "primary",
     });
     const identity = await service.authenticate(token);
@@ -126,16 +129,23 @@ suite("personal access token service", () => {
     const { token, record } = await service.mint({
       userId,
       organizationId,
+      requestId: "req-mint",
       name: "to-revoke",
     });
     expect(await service.authenticate(token)).toBeDefined();
     // Another user cannot revoke it.
     const other = await provisionUser();
-    expect(await service.revoke(record.id, other.userId)).toBeUndefined();
+    expect(
+      await service.revoke(record.id, other.userId, "req-revoke"),
+    ).toBeUndefined();
     expect(await service.authenticate(token)).toBeDefined();
     // The owner can, and a second revoke is a no-op.
-    expect((await service.revoke(record.id, userId))?.status).toBe("revoked");
-    expect(await service.revoke(record.id, userId)).toBeUndefined();
+    expect(
+      (await service.revoke(record.id, userId, "req-revoke"))?.status,
+    ).toBe("revoked");
+    expect(
+      await service.revoke(record.id, userId, "req-revoke"),
+    ).toBeUndefined();
     expect(await service.authenticate(token)).toBeUndefined();
   });
 
@@ -144,6 +154,7 @@ suite("personal access token service", () => {
     const { token, record } = await service.mint({
       userId,
       organizationId,
+      requestId: "req-mint",
       name: "expiring",
       expiresAt: new Date(Date.now() + 60_000),
     });
@@ -160,6 +171,7 @@ suite("personal access token service", () => {
     const { token } = await service.mint({
       userId,
       organizationId,
+      requestId: "req-mint",
       name: "gated",
     });
     await pool.query(
@@ -181,8 +193,18 @@ suite("personal access token service", () => {
 
   it("lists a user's tokens without exposing secrets", async () => {
     const { userId, organizationId } = await provisionUser();
-    await service.mint({ userId, organizationId, name: "one" });
-    await service.mint({ userId, organizationId, name: "two" });
+    await service.mint({
+      userId,
+      organizationId,
+      requestId: "req-mint",
+      name: "one",
+    });
+    await service.mint({
+      userId,
+      organizationId,
+      requestId: "req-mint",
+      name: "two",
+    });
     const list = await service.listForUser(userId);
     expect(list).toHaveLength(2);
     expect(JSON.stringify(list)).not.toMatch(/secret|hash/i);
@@ -195,6 +217,7 @@ suite("personal access token service", () => {
     const { token, record } = await service.mint({
       userId,
       organizationId,
+      requestId: "req-mint",
       name: "scoped",
       scopeCatalogueEntryIds: [ce2, ce1],
     });
@@ -217,6 +240,7 @@ suite("personal access token service", () => {
     const { token } = await service.mint({
       userId,
       organizationId,
+      requestId: "req-mint",
       name: "unscoped",
     });
     const identity = await service.authenticate(token);
@@ -235,6 +259,7 @@ suite("personal access token service", () => {
       service.mint({
         userId,
         organizationId,
+        requestId: "req-mint",
         name: "bad-scope",
         scopeCatalogueEntryIds: [real, bogus],
       }),
@@ -262,6 +287,7 @@ suite("personal access token service", () => {
     const { token } = await v1Service.mint({
       userId,
       organizationId,
+      requestId: "req-mint",
       name: "pre-rotation",
     });
     // Rotate: currentVersion=2 with a NEW current key, but v1 remains present.
@@ -277,6 +303,7 @@ suite("personal access token service", () => {
     const fresh = await rotated.mint({
       userId,
       organizationId,
+      requestId: "req-mint",
       name: "post-rotation",
     });
     const { rows } = await pool.query<{ hash_key_version: number }>(
@@ -292,6 +319,7 @@ suite("personal access token service", () => {
     const { token, record } = await service.mint({
       userId,
       organizationId,
+      requestId: "req-mint",
       name: "orphaned-version",
     });
     expect(await service.authenticate(token)).toBeDefined();
@@ -308,6 +336,7 @@ suite("personal access token service", () => {
     const { token } = await service.mint({
       userId,
       organizationId,
+      requestId: "req-mint",
       name: "wrong-secret",
     });
     const parsed = parsePatToken(token)!;

@@ -44,6 +44,7 @@ suite("catalogue repository", () => {
         description: "A fast agent.",
       },
       adminId,
+      "req-cat",
     );
     expect(entry.status).toBe("draft");
     expect(entry.publicAlias).toBe("sculpin-fast");
@@ -67,9 +68,10 @@ suite("catalogue repository", () => {
         displayName: "Sculpin Pro",
       },
       adminId,
+      "req-cat",
     );
     expect(await repository.resolvePublishedAlias("sculpin-pro")).toBeUndefined();
-    const published = await repository.publish(entry.id, adminId);
+    const published = await repository.publish(entry.id, adminId, "req-cat");
     expect(published?.status).toBe("published");
     expect(published?.version).toBe(2);
     expect(await repository.resolvePublishedAlias("sculpin-pro")).toEqual({
@@ -86,13 +88,14 @@ suite("catalogue repository", () => {
         displayName: "Sculpin Temp",
       },
       adminId,
+      "req-cat",
     );
-    await repository.publish(entry.id, adminId);
+    await repository.publish(entry.id, adminId, "req-cat");
     expect(await repository.resolvePublishedAlias("sculpin-temp")).toEqual({
       catalogueEntryId: entry.id,
       upstreamAgentId: "internal-agent-temp",
     });
-    const disabled = await repository.unpublish(entry.id, adminId);
+    const disabled = await repository.unpublish(entry.id, adminId, "req-cat");
     expect(disabled?.status).toBe("disabled");
     expect(await repository.resolvePublishedAlias("sculpin-temp")).toBeUndefined();
   });
@@ -144,6 +147,7 @@ suite("catalogue repository", () => {
         accessInstructions: "Step 1\nStep 2",
       },
       adminId,
+      "req-cat",
     );
     expect(entry.accessInstructions).toBe("Step 1\nStep 2");
 
@@ -155,6 +159,7 @@ suite("catalogue repository", () => {
         accessInstructions: "New instructions.",
       },
       adminId,
+      "req-cat",
     );
     expect(updated?.displayName).toBe("Renamed Guide");
     expect(updated?.description).toBeUndefined();
@@ -165,7 +170,7 @@ suite("catalogue repository", () => {
     expect(updated?.upstreamAgentId).toBe("internal-agent-guide");
 
     // Published access instructions surface in the public projection.
-    await repository.publish(entry.id, adminId);
+    await repository.publish(entry.id, adminId, "req-cat");
     const published = (await repository.listPublished()).find(
       (m) => m.id === "sculpin-guide",
     );
@@ -177,6 +182,7 @@ suite("catalogue repository", () => {
       "00000000-0000-4000-8000-000000000000",
       { displayName: "Nope" },
       adminId,
+      "req-cat",
     );
     expect(missing).toBeUndefined();
   });
@@ -185,6 +191,7 @@ suite("catalogue repository", () => {
     const missing = await repository.publish(
       "00000000-0000-4000-8000-000000000000",
       adminId,
+      "req-cat",
     );
     expect(missing).toBeUndefined();
   });
@@ -232,6 +239,7 @@ suite("catalogue repository", () => {
           displayName: "Duplicate",
         },
         adminId,
+        "req-cat-dup",
       ),
     ).rejects.toThrow(DomainConflictError);
   });

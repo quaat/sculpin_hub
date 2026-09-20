@@ -25,6 +25,7 @@ const ADMIN_ID = "22222222-2222-4222-8222-222222222222";
 const ORG_ID = "33333333-3333-4333-8333-333333333333";
 const PLAN_ID = "44444444-4444-4444-8444-444444444444";
 const SUB_ID = "55555555-5555-4555-8555-555555555555";
+const REQ = "req-subscription";
 
 /**
  * Build an injectable authz that resolves the caller as a MEMBER (owner) of
@@ -166,7 +167,7 @@ describe("claimSelfServicePlan", () => {
     subscriptionRepository.grantFromPlan.mockResolvedValue(sampleSubscription);
 
     const result = await claimSelfServicePlan(
-      { organizationId: ORG_ID, planId: PLAN_ID },
+      { organizationId: ORG_ID, planId: PLAN_ID, requestId: REQ },
       {
         authz: authzFor("member"),
         planRepository: planRepository as unknown as PlanRepository,
@@ -179,7 +180,7 @@ describe("claimSelfServicePlan", () => {
     expect(subscriptionRepository.grantFromPlan).toHaveBeenCalledWith(
       ORG_ID,
       PLAN_ID,
-      USER_ID,
+      { actorUserId: USER_ID, requestId: REQ, viaAdmin: false },
     );
   });
 
@@ -203,7 +204,7 @@ describe("claimSelfServicePlan", () => {
       expect(
         await claimReasonOf(() =>
           claimSelfServicePlan(
-            { organizationId: ORG_ID, planId: PLAN_ID },
+            { organizationId: ORG_ID, planId: PLAN_ID, requestId: REQ },
             {
               authz: authzFor("member"),
               planRepository: planRepository as unknown as PlanRepository,
@@ -225,7 +226,7 @@ describe("claimSelfServicePlan", () => {
     expect(
       await claimReasonOf(() =>
         claimSelfServicePlan(
-          { organizationId: ORG_ID, planId: PLAN_ID },
+          { organizationId: ORG_ID, planId: PLAN_ID, requestId: REQ },
           {
             authz: authzFor("member"),
             planRepository: planRepository as unknown as PlanRepository,
@@ -245,7 +246,7 @@ describe("claimSelfServicePlan", () => {
     expect(
       await claimReasonOf(() =>
         claimSelfServicePlan(
-          { organizationId: ORG_ID, planId: "not-a-uuid" },
+          { organizationId: ORG_ID, planId: "not-a-uuid", requestId: REQ },
           {
             authz: authzFor("member"),
             planRepository: planRepository as unknown as PlanRepository,
@@ -268,7 +269,7 @@ describe("claimSelfServicePlan", () => {
     expect(
       await reasonOf(() =>
         claimSelfServicePlan(
-          { organizationId: ORG_ID, planId: PLAN_ID },
+          { organizationId: ORG_ID, planId: PLAN_ID, requestId: REQ },
           {
             authz: authzFor("user"),
             planRepository: planRepository as unknown as PlanRepository,
@@ -295,7 +296,7 @@ describe("claimSelfServicePlan", () => {
 
     await expect(
       claimSelfServicePlan(
-        { organizationId: ORG_ID, planId: PLAN_ID },
+        { organizationId: ORG_ID, planId: PLAN_ID, requestId: REQ },
         {
           authz: authzFor("member"),
           planRepository: planRepository as unknown as PlanRepository,
@@ -313,7 +314,7 @@ describe("adminGrantPlan", () => {
     expect(
       await reasonOf(() =>
         adminGrantPlan(
-          { organizationId: ORG_ID, planId: PLAN_ID },
+          { organizationId: ORG_ID, planId: PLAN_ID, requestId: REQ },
           {
             authz: authzFor("user"),
             subscriptionRepository:
@@ -344,7 +345,7 @@ describe("adminGrantPlan", () => {
     });
 
     const result = await adminGrantPlan(
-      { organizationId: ORG_ID, planId: PLAN_ID },
+      { organizationId: ORG_ID, planId: PLAN_ID, requestId: REQ },
       {
         authz: authzFor("admin"),
         planRepository: planRepository as unknown as PlanRepository,
@@ -357,7 +358,7 @@ describe("adminGrantPlan", () => {
     expect(subscriptionRepository.grantFromPlan).toHaveBeenCalledWith(
       ORG_ID,
       PLAN_ID,
-      ADMIN_ID,
+      { actorUserId: ADMIN_ID, requestId: REQ, viaAdmin: true },
     );
   });
 
@@ -371,7 +372,7 @@ describe("adminGrantPlan", () => {
     let caught: unknown;
     try {
       await adminGrantPlan(
-        { organizationId: ORG_ID, planId: PLAN_ID },
+        { organizationId: ORG_ID, planId: PLAN_ID, requestId: REQ },
         {
           authz: authzFor("admin"),
           planRepository: planRepository as unknown as PlanRepository,
@@ -397,7 +398,7 @@ describe("adminGrantPlan", () => {
     let caught: unknown;
     try {
       await adminGrantPlan(
-        { organizationId: ORG_ID, planId: PLAN_ID },
+        { organizationId: ORG_ID, planId: PLAN_ID, requestId: REQ },
         {
           authz: authzFor("admin"),
           planRepository: planRepository as unknown as PlanRepository,
@@ -421,7 +422,7 @@ describe("adminGrantPlan", () => {
     let caught: unknown;
     try {
       await adminGrantPlan(
-        { organizationId: ORG_ID, planId: PLAN_ID },
+        { organizationId: ORG_ID, planId: PLAN_ID, requestId: REQ },
         {
           authz: authzFor("admin"),
           planRepository: planRepository as unknown as PlanRepository,
@@ -442,7 +443,7 @@ describe("adminGrantPlan", () => {
     let caught: unknown;
     try {
       await adminGrantPlan(
-        { organizationId: "not-a-uuid", planId: PLAN_ID },
+        { organizationId: "not-a-uuid", planId: PLAN_ID, requestId: REQ },
         {
           authz: authzFor("admin"),
           subscriptionRepository:
@@ -464,7 +465,7 @@ describe("adminSetSubscriptionStatus", () => {
     expect(
       await reasonOf(() =>
         adminSetSubscriptionStatus(
-          { subscriptionId: "not-a-uuid", status: "suspended" },
+          { subscriptionId: "not-a-uuid", status: "suspended", requestId: REQ },
           {
             authz: authzFor("user"),
             subscriptionRepository:
@@ -480,7 +481,7 @@ describe("adminSetSubscriptionStatus", () => {
     const subscriptionRepository = mockSubscriptionRepository();
     await expect(
       adminSetSubscriptionStatus(
-        { subscriptionId: "not-a-uuid", status: "suspended" },
+        { subscriptionId: "not-a-uuid", status: "suspended", requestId: REQ },
         {
           authz: authzFor("admin"),
           subscriptionRepository:
@@ -499,7 +500,7 @@ describe("adminSetSubscriptionStatus", () => {
     });
 
     const result = await adminSetSubscriptionStatus(
-      { subscriptionId: SUB_ID, status: "suspended" },
+      { subscriptionId: SUB_ID, status: "suspended", requestId: REQ },
       {
         authz: authzFor("admin"),
         subscriptionRepository:
@@ -511,6 +512,7 @@ describe("adminSetSubscriptionStatus", () => {
     expect(subscriptionRepository.setStatus).toHaveBeenCalledWith(
       SUB_ID,
       "suspended",
+      { actorUserId: ADMIN_ID, requestId: REQ },
     );
   });
 });
@@ -623,7 +625,7 @@ describe("claimSelfServicePlanForCaller", () => {
     subscriptionRepository.grantFromPlan.mockResolvedValue(sampleSubscription);
     const resolvePersonalOrganizationId = vi.fn(() => Promise.resolve(ORG_ID));
 
-    const result = await claimSelfServicePlanForCaller(PLAN_ID, {
+    const result = await claimSelfServicePlanForCaller(PLAN_ID, REQ, {
       authz: authzFor("member"),
       planRepository: planRepository as unknown as PlanRepository,
       subscriptionRepository:
@@ -636,7 +638,7 @@ describe("claimSelfServicePlanForCaller", () => {
     expect(subscriptionRepository.grantFromPlan).toHaveBeenCalledWith(
       ORG_ID,
       PLAN_ID,
-      USER_ID,
+      { actorUserId: USER_ID, requestId: REQ, viaAdmin: false },
     );
   });
 
@@ -648,7 +650,7 @@ describe("claimSelfServicePlanForCaller", () => {
 
     expect(
       await claimReasonOf(() =>
-        claimSelfServicePlanForCaller(PLAN_ID, {
+        claimSelfServicePlanForCaller(PLAN_ID, REQ, {
           authz: authzFor("member"),
           planRepository: planRepository as unknown as PlanRepository,
           subscriptionRepository:

@@ -19,17 +19,25 @@ const enabled = process.env.RUN_DATABASE_INTEGRATION === "true";
 const suite = enabled ? describe : describe.skip;
 
 const FREE_TRIAL_PLAN_ID = "00000000-0000-4000-8000-0000000f7a11";
-const ADMIN = "00000000-0000-4000-8000-000000000abc";
-const ACTOR = "00000000-0000-4000-8000-000000000abd";
 
 suite("plan repository", () => {
   let pool: pg.Pool;
   let plans: PostgresPlanRepository;
   let subscriptions: PostgresSubscriptionRepository;
   let tenant: PostgresPersonalTenantTransaction;
+  // Real users are required because plan/subscription audit rows carry a FK to
+  // `users` on the actor. ADMIN is a real admin user (platform-global audit);
+  // each provisioned org's owner is used as the self-service actor.
+  let ADMIN: string;
   let seq = 0;
 
-  async function provisionOrg(): Promise<string> {
+  // Returns the org id AND its owner user id (an active member — the valid
+  // self-service actor whose org-scoped audit row satisfies the composite
+  // membership FK).
+  async function provisionOrg(): Promise<{
+    organizationId: string;
+    ownerUserId: string;
+  }> {
     seq += 1;
     const result = await tenant.create({
       normalizedEmail: `plan-${seq}@example.com`,
@@ -38,7 +46,10 @@ suite("plan repository", () => {
       organizationSlug: `plan-tenant-${seq}`,
       requestId: `plan-tenant-${seq}`,
     });
-    return result.organizationId;
+    return {
+      organizationId: result.organizationId,
+      ownerUserId: result.userId,
+    };
   }
 
   async function createCatalogueEntry(): Promise<string> {
@@ -51,12 +62,20 @@ suite("plan repository", () => {
     return rows[0]!.id;
   }
 
-  beforeAll(() => {
+  beforeAll(async () => {
     if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required.");
     pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 8 });
     plans = new PostgresPlanRepository(pool);
     subscriptions = new PostgresSubscriptionRepository(pool);
     tenant = new PostgresPersonalTenantTransaction(pool);
+    const admin = await tenant.create({
+      normalizedEmail: "plan-admin@example.com",
+      displayName: "Plan Admin",
+      locale: "en",
+      organizationSlug: "plan-admin-org",
+      requestId: "plan-admin",
+    });
+    ADMIN = admin.userId;
   });
   afterAll(() => pool?.end());
 
@@ -81,12 +100,45 @@ suite("plan repository", () => {
         durationDays: 30,
       },
       ADMIN,
+      "req-plan-create",
     );
     const entry = await createCatalogueEntry();
-    const attached = await plans.attachCatalogueEntry(plan.id, entry);
+    const attached = await plans.attachCatalogueEntry(
+      plan.id,
+      entry,
+      ADMIN,
+      "req-attach",
+    );
     expect(attached?.catalogueEntryIds).toEqual([entry]);
-    const detached = await plans.detachCatalogueEntry(plan.id, entry);
+    const detached = await plans.detachCatalogueEntry(
+      plan.id,
+      entry,
+      ADMIN,
+      "req-detach",
+    );
     expect(detached?.catalogueEntryIds).toEqual([]);
+
+    // No-op attach/detach must write NO audit row (invariant every path honors).
+    const auditCount = async (requestId: string): Promise<number> => {
+      const { rows } = await pool.query(
+        "SELECT count(*)::int AS n FROM audit_events WHERE request_id = $1",
+        [requestId],
+      );
+      return (rows[0] as { n: number }).n;
+    };
+    await plans.detachCatalogueEntry(plan.id, entry, ADMIN, "req-detach-noop");
+    await plans.attachCatalogueEntry(plan.id, entry, ADMIN, "req-attach-again");
+    await plans.attachCatalogueEntry(
+      plan.id,
+      entry,
+      ADMIN,
+      "req-attach-conflict-noop",
+    );
+    expect(await auditCount("req-attach")).toBe(1);
+    expect(await auditCount("req-detach")).toBe(1);
+    expect(await auditCount("req-detach-noop")).toBe(0);
+    expect(await auditCount("req-attach-again")).toBe(1);
+    expect(await auditCount("req-attach-conflict-noop")).toBe(0);
   });
 
   it("grantFromPlan snapshots offerings; later plan edits do not change them", async () => {
@@ -99,24 +151,25 @@ suite("plan repository", () => {
         requestQuota: 500,
       },
       ADMIN,
+      "req-plan-create",
     );
     const entryA = await createCatalogueEntry();
     const entryB = await createCatalogueEntry();
-    await plans.attachCatalogueEntry(plan.id, entryA);
-    await plans.attachCatalogueEntry(plan.id, entryB);
+    await plans.attachCatalogueEntry(plan.id, entryA, ADMIN, "req-attach-a");
+    await plans.attachCatalogueEntry(plan.id, entryB, ADMIN, "req-attach-b");
 
-    const organizationId = await provisionOrg();
-    const sub = await subscriptions.grantFromPlan(
-      organizationId,
-      plan.id,
-      ACTOR,
-    );
+    const { organizationId, ownerUserId } = await provisionOrg();
+    const sub = await subscriptions.grantFromPlan(organizationId, plan.id, {
+      actorUserId: ownerUserId,
+      requestId: "req-grant",
+      viaAdmin: false,
+    });
     expect([...sub.offerings].sort()).toEqual([entryA, entryB].sort());
 
     // Edit the plan's authoritative mapping AFTER the grant: detach one, attach a new one.
-    await plans.detachCatalogueEntry(plan.id, entryA);
+    await plans.detachCatalogueEntry(plan.id, entryA, ADMIN, "req-detach-a");
     const entryC = await createCatalogueEntry();
-    await plans.attachCatalogueEntry(plan.id, entryC);
+    await plans.attachCatalogueEntry(plan.id, entryC, ADMIN, "req-attach-c");
 
     // The subscription's frozen snapshot is unchanged.
     const [reloaded] = await subscriptions.listForOrganization(organizationId);
@@ -124,10 +177,18 @@ suite("plan repository", () => {
   });
 
   it("rejects a second claim of a one-time plan", async () => {
-    const organizationId = await provisionOrg();
-    await subscriptions.grantFromPlan(organizationId, FREE_TRIAL_PLAN_ID, ACTOR);
+    const { organizationId, ownerUserId } = await provisionOrg();
+    const grant = {
+      actorUserId: ownerUserId,
+      requestId: "req-grant-1",
+      viaAdmin: false,
+    } as const;
+    await subscriptions.grantFromPlan(organizationId, FREE_TRIAL_PLAN_ID, grant);
     await expect(
-      subscriptions.grantFromPlan(organizationId, FREE_TRIAL_PLAN_ID, ACTOR),
+      subscriptions.grantFromPlan(organizationId, FREE_TRIAL_PLAN_ID, {
+        ...grant,
+        requestId: "req-grant-2",
+      }),
     ).rejects.toMatchObject({
       name: "DomainConflictError",
       code: "plan_already_claimed",
@@ -153,10 +214,19 @@ suite("plan repository", () => {
         requestQuota: 100,
       },
       ADMIN,
+      "req-plan-create",
     );
-    const organizationId = await provisionOrg();
-    await subscriptions.grantFromPlan(organizationId, plan.id, ACTOR);
-    await subscriptions.grantFromPlan(organizationId, plan.id, ACTOR);
+    const { organizationId, ownerUserId } = await provisionOrg();
+    await subscriptions.grantFromPlan(organizationId, plan.id, {
+      actorUserId: ownerUserId,
+      requestId: "req-grant-1",
+      viaAdmin: false,
+    });
+    await subscriptions.grantFromPlan(organizationId, plan.id, {
+      actorUserId: ownerUserId,
+      requestId: "req-grant-2",
+      viaAdmin: false,
+    });
     expect(
       await subscriptions.listForOrganization(organizationId),
     ).toHaveLength(2);
@@ -169,11 +239,15 @@ suite("plan repository", () => {
   });
 
   it("throws a validation error (not a conflict) for a missing plan", async () => {
-    const organizationId = await provisionOrg();
+    const { organizationId, ownerUserId } = await provisionOrg();
     const missing = "00000000-0000-4000-8000-000000000000";
     let caught: unknown;
     try {
-      await subscriptions.grantFromPlan(organizationId, missing, ACTOR);
+      await subscriptions.grantFromPlan(organizationId, missing, {
+        actorUserId: ownerUserId,
+        requestId: "req-grant",
+        viaAdmin: false,
+      });
     } catch (error) {
       caught = error;
     }

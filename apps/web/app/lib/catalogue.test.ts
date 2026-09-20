@@ -19,6 +19,7 @@ import { AuthzError, type AuthzDeps, type Session } from "./session";
 
 const ADMIN_ID = "11111111-1111-4111-8111-111111111111";
 const ENTRY_ID = "22222222-2222-4222-8222-222222222222";
+const REQ = "req-catalogue";
 
 function authzFor(role: "user" | "admin" | "none"): Partial<AuthzDeps> {
   const emptyOrg = () =>
@@ -86,19 +87,19 @@ describe("createCatalogueEntry", () => {
   it("creates as the acting admin", async () => {
     const repository = mockRepository();
     repository.create.mockResolvedValue(sampleEntry);
-    const result = await createCatalogueEntry(input, {
+    const result = await createCatalogueEntry(input, REQ, {
       authz: authzFor("admin"),
       repository: repository as unknown as CatalogueRepository,
     });
     expect(result).toBe(sampleEntry);
-    expect(repository.create).toHaveBeenCalledWith(input, ADMIN_ID);
+    expect(repository.create).toHaveBeenCalledWith(input, ADMIN_ID, REQ);
   });
 
   it("rejects a non-admin and never touches the repository", async () => {
     const repository = mockRepository();
     expect(
       await reasonOf(() =>
-        createCatalogueEntry(input, {
+        createCatalogueEntry(input, REQ, {
           authz: authzFor("user"),
           repository: repository as unknown as CatalogueRepository,
         }),
@@ -111,7 +112,7 @@ describe("createCatalogueEntry", () => {
     const repository = mockRepository();
     expect(
       await reasonOf(() =>
-        createCatalogueEntry(input, {
+        createCatalogueEntry(input, REQ, {
           authz: authzFor("none"),
           repository: repository as unknown as CatalogueRepository,
         }),
@@ -125,27 +126,27 @@ describe("publishCatalogueEntry / unpublishCatalogueEntry", () => {
   it("publishes as the acting admin", async () => {
     const repository = mockRepository();
     repository.publish.mockResolvedValue({ ...sampleEntry, status: "published" });
-    await publishCatalogueEntry(ENTRY_ID, {
+    await publishCatalogueEntry(ENTRY_ID, REQ, {
       authz: authzFor("admin"),
       repository: repository as unknown as CatalogueRepository,
     });
-    expect(repository.publish).toHaveBeenCalledWith(ENTRY_ID, ADMIN_ID);
+    expect(repository.publish).toHaveBeenCalledWith(ENTRY_ID, ADMIN_ID, REQ);
   });
 
   it("unpublishes as the acting admin", async () => {
     const repository = mockRepository();
     repository.unpublish.mockResolvedValue({ ...sampleEntry, status: "disabled" });
-    await unpublishCatalogueEntry(ENTRY_ID, {
+    await unpublishCatalogueEntry(ENTRY_ID, REQ, {
       authz: authzFor("admin"),
       repository: repository as unknown as CatalogueRepository,
     });
-    expect(repository.unpublish).toHaveBeenCalledWith(ENTRY_ID, ADMIN_ID);
+    expect(repository.unpublish).toHaveBeenCalledWith(ENTRY_ID, ADMIN_ID, REQ);
   });
 
   it("rejects a malformed entry id (admin, but bad input)", async () => {
     const repository = mockRepository();
     await expect(
-      publishCatalogueEntry("not-a-uuid", {
+      publishCatalogueEntry("not-a-uuid", REQ, {
         authz: authzFor("admin"),
         repository: repository as unknown as CatalogueRepository,
       }),
@@ -157,7 +158,7 @@ describe("publishCatalogueEntry / unpublishCatalogueEntry", () => {
     const repository = mockRepository();
     expect(
       await reasonOf(() =>
-        publishCatalogueEntry("not-a-uuid", {
+        publishCatalogueEntry("not-a-uuid", REQ, {
           authz: authzFor("user"),
           repository: repository as unknown as CatalogueRepository,
         }),
@@ -233,7 +234,7 @@ describe("createCatalogueEntryFromDiscovered", () => {
       ...sampleEntry,
       upstreamAgentId: AGENT_UUID,
     });
-    const result = await createCatalogueEntryFromDiscovered(input, {
+    const result = await createCatalogueEntryFromDiscovered(input, REQ, {
       authz: authzFor("admin"),
       repository: repository as unknown as CatalogueRepository,
       discoveredAgents: discovered("support", AGENT_UUID),
@@ -246,13 +247,14 @@ describe("createCatalogueEntryFromDiscovered", () => {
         displayName: "Sculpin Fast",
       },
       ADMIN_ID,
+      REQ,
     );
   });
 
   it("fails closed for an unknown/disappeared agent id (never creates)", async () => {
     const repository = mockRepository();
     await expect(
-      createCatalogueEntryFromDiscovered(input, {
+      createCatalogueEntryFromDiscovered(input, REQ, {
         authz: authzFor("admin"),
         repository: repository as unknown as CatalogueRepository,
         discoveredAgents: discovered("support"),
@@ -266,6 +268,7 @@ describe("createCatalogueEntryFromDiscovered", () => {
     await expect(
       createCatalogueEntryFromDiscovered(
         { ...input, upstreamAgentId: "support" },
+        REQ,
         {
           authz: authzFor("admin"),
           repository: repository as unknown as CatalogueRepository,
@@ -280,7 +283,7 @@ describe("createCatalogueEntryFromDiscovered", () => {
     const repository = mockRepository();
     expect(
       await reasonOf(() =>
-        createCatalogueEntryFromDiscovered(input, {
+        createCatalogueEntryFromDiscovered(input, REQ, {
           authz: authzFor("user"),
           repository: repository as unknown as CatalogueRepository,
           discoveredAgents: discovered(AGENT_UUID),

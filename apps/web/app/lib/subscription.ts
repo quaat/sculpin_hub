@@ -209,7 +209,11 @@ export async function listOrganizationSubscriptions(
  *      `DomainConflictError("plan_already_claimed")`, which propagates.
  */
 export async function claimSelfServicePlan(
-  input: { readonly organizationId: string; readonly planId: string },
+  input: {
+    readonly organizationId: string;
+    readonly planId: string;
+    readonly requestId: string;
+  },
   deps?: SubscriptionDeps,
 ): Promise<Subscription> {
   const ctx = await requireOrganization(input.organizationId, deps?.authz);
@@ -230,11 +234,11 @@ export async function claimSelfServicePlan(
   const subscriptionRepository = await resolveSubscriptionRepository(
     deps?.subscriptionRepository,
   );
-  return subscriptionRepository.grantFromPlan(
-    input.organizationId,
-    input.planId,
-    ctx.user.id,
-  );
+  return subscriptionRepository.grantFromPlan(input.organizationId, input.planId, {
+    actorUserId: ctx.user.id,
+    requestId: input.requestId,
+    viaAdmin: false,
+  });
 }
 
 /**
@@ -246,7 +250,11 @@ export async function claimSelfServicePlan(
  * row (never the session).
  */
 export async function adminGrantPlan(
-  input: { readonly organizationId: string; readonly planId: string },
+  input: {
+    readonly organizationId: string;
+    readonly planId: string;
+    readonly requestId: string;
+  },
   deps?: SubscriptionDeps,
 ): Promise<Subscription> {
   const ctx = await requireAdmin(deps?.authz);
@@ -269,11 +277,11 @@ export async function adminGrantPlan(
   const subscriptionRepository = await resolveSubscriptionRepository(
     deps?.subscriptionRepository,
   );
-  return subscriptionRepository.grantFromPlan(
-    input.organizationId,
-    input.planId,
-    ctx.user.id,
-  );
+  return subscriptionRepository.grantFromPlan(input.organizationId, input.planId, {
+    actorUserId: ctx.user.id,
+    requestId: input.requestId,
+    viaAdmin: true,
+  });
 }
 
 /**
@@ -287,15 +295,19 @@ export async function adminSetSubscriptionStatus(
   input: {
     readonly subscriptionId: string;
     readonly status: SubscriptionStatus;
+    readonly requestId: string;
   },
   deps?: SubscriptionDeps,
 ): Promise<Subscription | undefined> {
-  await requireAdmin(deps?.authz);
+  const ctx = await requireAdmin(deps?.authz);
   if (!uuidPattern.test(input.subscriptionId)) throw new SubscriptionInputError();
   const subscriptionRepository = await resolveSubscriptionRepository(
     deps?.subscriptionRepository,
   );
-  return subscriptionRepository.setStatus(input.subscriptionId, input.status);
+  return subscriptionRepository.setStatus(input.subscriptionId, input.status, {
+    actorUserId: ctx.user.id,
+    requestId: input.requestId,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -328,10 +340,11 @@ export async function resolveCallerPersonalOrganizationId(
  */
 export async function claimSelfServicePlanForCaller(
   planId: string,
+  requestId: string,
   deps?: SubscriptionDeps,
 ): Promise<Subscription> {
   const organizationId = await resolveCallerPersonalOrganizationId(deps);
-  return claimSelfServicePlan({ organizationId, planId }, deps);
+  return claimSelfServicePlan({ organizationId, planId, requestId }, deps);
 }
 
 /** List the CALLER's own personal-organization subscriptions. */

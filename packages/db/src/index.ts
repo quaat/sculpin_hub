@@ -6,6 +6,12 @@ export {
   validateOutboxPayload,
 } from "./outbox.js";
 export {
+  insertAuditEvent,
+  type AuditActor,
+  type AuditEventInput,
+  type Queryable,
+} from "./audit.js";
+export {
   PostgresIdentityRepository,
   PostgresMembershipRepository,
   PostgresPersonalTenantTransaction,

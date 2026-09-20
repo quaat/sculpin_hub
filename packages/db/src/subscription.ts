@@ -12,6 +12,7 @@ import {
   type UsageContext,
 } from "@sculpin/domain";
 import type { Pool, PoolClient } from "pg";
+import { insertAuditEvent } from "./audit.js";
 
 interface SubscriptionRow {
   id: string;
@@ -92,9 +93,12 @@ export class PostgresSubscriptionRepository implements SubscriptionRepository {
   async grantFromPlan(
     organizationId: OrganizationId,
     planId: string,
-    _actorUserId: string,
+    grant: {
+      readonly actorUserId: string;
+      readonly requestId: string;
+      readonly viaAdmin: boolean;
+    },
   ): Promise<Subscription> {
-    void _actorUserId;
     const client: PoolClient = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -164,10 +168,52 @@ export class PostgresSubscriptionRepository implements SubscriptionRepository {
         `SELECT ${SELECT_COLUMNS} ${FROM_JOIN} WHERE s.id = $1`,
         [subscriptionId],
       );
-      await client.query("COMMIT");
       const mapped = row.rows[0];
-      if (!mapped) throw new Error("subscription_read_failed");
-      return mapRow(mapped);
+      if (!mapped) {
+        await client.query("ROLLBACK");
+        throw new Error("subscription_read_failed");
+      }
+      const subscription = mapRow(mapped);
+      // Audit the grant in the SAME transaction. Self-service (viaAdmin=false):
+      // the actor is the org's own owner-member, so the event is org-scoped and
+      // the composite membership FK is satisfied. Admin grant (viaAdmin=true):
+      // the admin is NOT a member of the grantee org, so the event is
+      // PLATFORM-GLOBAL (organization_id = NULL) and names the affected org in
+      // after_summary. Only safe metadata (ids, plan key, quota, status).
+      if (grant.viaAdmin) {
+        await insertAuditEvent(client, {
+          organizationId: null,
+          actor: { actorUserId: grant.actorUserId },
+          action: "subscription.admin_granted",
+          targetType: "subscription",
+          targetId: subscription.id,
+          afterSummary: {
+            organizationId,
+            planId,
+            planKey: subscription.planKey,
+            quotaLimit: subscription.quotaLimit,
+            status: subscription.status,
+          },
+          requestId: grant.requestId,
+        });
+      } else {
+        await insertAuditEvent(client, {
+          organizationId,
+          actor: { actorUserId: grant.actorUserId },
+          action: "subscription.self_claimed",
+          targetType: "subscription",
+          targetId: subscription.id,
+          afterSummary: {
+            planId,
+            planKey: subscription.planKey,
+            quotaLimit: subscription.quotaLimit,
+            status: subscription.status,
+          },
+          requestId: grant.requestId,
+        });
+      }
+      await client.query("COMMIT");
+      return subscription;
     } catch (error) {
       // If we already ROLLBACK'd above, this is a no-op; guard against a double
       // rollback surfacing as an error.
@@ -299,6 +345,7 @@ export class PostgresSubscriptionRepository implements SubscriptionRepository {
   async setStatus(
     id: string,
     status: SubscriptionStatus,
+    actor: { readonly actorUserId: string; readonly requestId: string },
   ): Promise<Subscription | undefined> {
     // Enforces the full state machine in SQL. The domain transition table is the
     // source of truth for which `from` states may reach `status`; the UPDATE only
@@ -318,18 +365,54 @@ export class PostgresSubscriptionRepository implements SubscriptionRepository {
     });
     if (legalFrom.length === 0) return undefined;
     const isTerminal = status === "canceled" || status === "expired";
-    const result = await this.pool.query<SubscriptionRow>(
-      `UPDATE subscriptions s
-       SET status = $2::subscription_status,
-           ends_at = CASE WHEN $3::boolean AND s.ends_at IS NULL THEN now() ELSE s.ends_at END,
-           version = s.version + 1,
-           updated_at = now()
-       FROM plans p
-       WHERE s.id = $1 AND p.id = s.plan_id AND s.status = ANY($4::subscription_status[])
-       RETURNING ${SELECT_COLUMNS}`,
-      [id, status, isTerminal, legalFrom],
-    );
-    const row = result.rows[0];
-    return row ? mapRow(row) : undefined;
+    // Admin-only, cross-org status change: PLATFORM-GLOBAL audit
+    // (organization_id = NULL) naming the affected org in after_summary. Run the
+    // UPDATE and its audit row in ONE transaction so they commit together.
+    const client: PoolClient = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<SubscriptionRow>(
+        `UPDATE subscriptions s
+         SET status = $2::subscription_status,
+             ends_at = CASE WHEN $3::boolean AND s.ends_at IS NULL THEN now() ELSE s.ends_at END,
+             version = s.version + 1,
+             updated_at = now()
+         FROM plans p
+         WHERE s.id = $1 AND p.id = s.plan_id AND s.status = ANY($4::subscription_status[])
+         RETURNING ${SELECT_COLUMNS}`,
+        [id, status, isTerminal, legalFrom],
+      );
+      const row = result.rows[0];
+      if (!row) {
+        // Illegal / no-op transition: nothing changed, write no audit row.
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const mapped = mapRow(row);
+      await insertAuditEvent(client, {
+        organizationId: null,
+        actor: { actorUserId: actor.actorUserId },
+        action: "subscription.status_changed",
+        targetType: "subscription",
+        targetId: id,
+        beforeSummary: null,
+        afterSummary: {
+          organizationId: mapped.organizationId,
+          status: mapped.status,
+        },
+        requestId: actor.requestId,
+      });
+      await client.query("COMMIT");
+      return mapped;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore — the transaction was already resolved.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }

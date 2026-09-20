@@ -81,11 +81,12 @@ function assertEntryId(id: string): void {
  */
 export async function createCatalogueEntry(
   input: CatalogueEntryInput,
+  requestId: string,
   deps?: CatalogueAdminDeps,
 ): Promise<CatalogueEntry> {
   const ctx = await requireAdmin(deps?.authz);
   const repository = await resolveRepository(deps?.repository);
-  return repository.create(input, ctx.user.id);
+  return repository.create(input, ctx.user.id, requestId);
 }
 
 /**
@@ -98,32 +99,35 @@ export async function createCatalogueEntry(
 export async function updateCatalogueMetadata(
   id: string,
   patch: CatalogueEntryMetadataPatch,
+  requestId: string,
   deps?: CatalogueAdminDeps,
 ): Promise<CatalogueEntry | undefined> {
   const ctx = await requireAdmin(deps?.authz);
   assertEntryId(id);
   const repository = await resolveRepository(deps?.repository);
-  return repository.updateMetadata(id, patch, ctx.user.id);
+  return repository.updateMetadata(id, patch, ctx.user.id, requestId);
 }
 
 export async function publishCatalogueEntry(
   id: string,
+  requestId: string,
   deps?: CatalogueAdminDeps,
 ): Promise<CatalogueEntry | undefined> {
   const ctx = await requireAdmin(deps?.authz);
   assertEntryId(id);
   const repository = await resolveRepository(deps?.repository);
-  return repository.publish(id, ctx.user.id);
+  return repository.publish(id, ctx.user.id, requestId);
 }
 
 export async function unpublishCatalogueEntry(
   id: string,
+  requestId: string,
   deps?: CatalogueAdminDeps,
 ): Promise<CatalogueEntry | undefined> {
   const ctx = await requireAdmin(deps?.authz);
   assertEntryId(id);
   const repository = await resolveRepository(deps?.repository);
-  return repository.unpublish(id, ctx.user.id);
+  return repository.unpublish(id, ctx.user.id, requestId);
 }
 
 export async function listCatalogueForAdmin(
@@ -198,6 +202,7 @@ async function resolveDiscovered(
  */
 export async function createCatalogueEntryFromDiscovered(
   input: CreateFromDiscoveredInput,
+  requestId: string,
   deps?: DiscoveryDrivenDeps,
 ): Promise<CatalogueEntry> {
   const ctx = await requireAdmin(deps?.authz);
@@ -216,7 +221,7 @@ export async function createCatalogueEntryFromDiscovered(
       ? { accessInstructions: input.accessInstructions }
       : {}),
   };
-  return repository.create(entryInput, ctx.user.id);
+  return repository.create(entryInput, ctx.user.id, requestId);
 }
 
 /**

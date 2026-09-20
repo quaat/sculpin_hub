@@ -37,8 +37,9 @@ export async function claimPlanAction(formData: FormData): Promise<ClaimResult> 
   if (typeof planId !== "string" || planId.length === 0) {
     return { ok: false, message: "A plan must be selected." };
   }
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    await claimSelfServicePlanForCaller(planId);
+    await claimSelfServicePlanForCaller(planId, requestId);
     revalidatePath("/account");
     return { ok: true };
   } catch (error) {

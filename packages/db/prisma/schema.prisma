@@ -176,7 +176,7 @@ model OrganizationMembership {
 
 model AuditEvent {
   id              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId  String                  @map("organization_id") @db.Uuid
+  organizationId  String?                 @map("organization_id") @db.Uuid
   actorUserId     String?                 @map("actor_user_id") @db.Uuid
   systemActor     String?                 @map("system_actor") @db.VarChar(64)
   action          String                  @db.VarChar(120)
@@ -186,11 +186,12 @@ model AuditEvent {
   afterSummary    Json?                   @map("after_summary")
   requestId       String                  @map("request_id") @db.VarChar(128)
   occurredAt      DateTime                @map("occurred_at") @db.Timestamptz(6)
-  organization    Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organization    Organization?           @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   actorUser       User?                   @relation(fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   actorMembership OrganizationMembership? @relation(fields: [organizationId, actorUserId], references: [organizationId, userId], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([organizationId, occurredAt], map: "idx_audit_events_org_occurred")
+  @@index([occurredAt], map: "idx_audit_events_occurred_at")
   @@map("audit_events")
 }
 

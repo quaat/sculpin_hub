@@ -58,69 +58,85 @@ function assertPlanId(id: string): void {
 
 export async function createPlan(
   input: PlanInput,
+  requestId: string,
   deps?: PlanAdminDeps,
 ): Promise<Plan> {
   const ctx = await requireAdmin(deps?.authz);
   const repository = await resolveRepository(deps?.repository);
   // `PostgresPlanRepository.create` calls `validatePlanInput`; not re-validated.
-  return repository.create(input, ctx.user.id);
+  return repository.create(input, ctx.user.id, requestId);
 }
 
 export async function updatePlan(
   id: string,
   patch: PlanPatch,
+  requestId: string,
   deps?: PlanAdminDeps,
 ): Promise<Plan | undefined> {
   const ctx = await requireAdmin(deps?.authz);
   assertPlanId(id);
   const repository = await resolveRepository(deps?.repository);
-  return repository.update(id, patch, ctx.user.id);
+  return repository.update(id, patch, ctx.user.id, requestId);
 }
 
 export async function setPlanEnabled(
   id: string,
   enabled: boolean,
+  requestId: string,
   deps?: PlanAdminDeps,
 ): Promise<Plan | undefined> {
   const ctx = await requireAdmin(deps?.authz);
   assertPlanId(id);
   const repository = await resolveRepository(deps?.repository);
-  return repository.setEnabled(id, enabled, ctx.user.id);
+  return repository.setEnabled(id, enabled, ctx.user.id, requestId);
 }
 
 export async function setPlanPublished(
   id: string,
   published: boolean,
+  requestId: string,
   deps?: PlanAdminDeps,
 ): Promise<Plan | undefined> {
   const ctx = await requireAdmin(deps?.authz);
   assertPlanId(id);
   const repository = await resolveRepository(deps?.repository);
-  return repository.setPublished(id, published, ctx.user.id);
+  return repository.setPublished(id, published, ctx.user.id, requestId);
 }
 
 export async function attachPlanCatalogueEntry(
   planId: string,
   catalogueEntryId: string,
+  requestId: string,
   deps?: PlanAdminDeps,
 ): Promise<Plan | undefined> {
-  await requireAdmin(deps?.authz);
+  const ctx = await requireAdmin(deps?.authz);
   assertPlanId(planId);
   assertPlanId(catalogueEntryId);
   const repository = await resolveRepository(deps?.repository);
-  return repository.attachCatalogueEntry(planId, catalogueEntryId);
+  return repository.attachCatalogueEntry(
+    planId,
+    catalogueEntryId,
+    ctx.user.id,
+    requestId,
+  );
 }
 
 export async function detachPlanCatalogueEntry(
   planId: string,
   catalogueEntryId: string,
+  requestId: string,
   deps?: PlanAdminDeps,
 ): Promise<Plan | undefined> {
-  await requireAdmin(deps?.authz);
+  const ctx = await requireAdmin(deps?.authz);
   assertPlanId(planId);
   assertPlanId(catalogueEntryId);
   const repository = await resolveRepository(deps?.repository);
-  return repository.detachCatalogueEntry(planId, catalogueEntryId);
+  return repository.detachCatalogueEntry(
+    planId,
+    catalogueEntryId,
+    ctx.user.id,
+    requestId,
+  );
 }
 
 export async function listPlansForAdmin(

@@ -7,7 +7,8 @@ import {
   type PlanPatch,
   type PlanRepository,
 } from "@sculpin/domain";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
+import { insertAuditEvent } from "./audit.js";
 
 interface PlanRow {
   id: string;
@@ -68,42 +69,82 @@ function mapRow(row: PlanRow): Plan {
 export class PostgresPlanRepository implements PlanRepository {
   constructor(private readonly pool: Pool) {}
 
-  async create(input: PlanInput, adminUserId: string): Promise<Plan> {
+  async create(
+    input: PlanInput,
+    adminUserId: string,
+    requestId: string,
+  ): Promise<Plan> {
     validatePlanInput(input);
-    const result = await this.pool.query<PlanRow>(
-      `WITH inserted AS (
-         INSERT INTO plans (
-           key, name, description, kind, self_service_eligible, admin_grantable,
-           duration_days, request_quota, one_time_per_organization,
-           created_by, updated_by
-         ) VALUES ($1,$2,$3,$4::plan_kind,$5,$6,$7,$8,$9,$10,$10)
-         RETURNING *
-       )
-       SELECT ${SELECT_COLUMNS} FROM inserted p`,
-      [
-        input.key,
-        input.name,
-        input.description ?? null,
-        input.kind,
-        input.selfServiceEligible ?? false,
-        input.adminGrantable ?? true,
-        input.durationDays ?? null,
-        input.requestQuota,
-        // Free trials default to one-time-per-organization so a tenant cannot
-        // re-claim a trial repeatedly; other kinds default to repeatable.
-        input.oneTimePerOrganization ?? input.kind === "free_trial",
-        adminUserId,
-      ],
-    );
-    const row = result.rows[0];
-    if (!row) throw new Error("plan_insert_failed");
-    return mapRow(row);
+    // Plan CRUD is PLATFORM-GLOBAL (no tenant org): organization_id = NULL,
+    // actor = the responsible admin.
+    const client: PoolClient = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<PlanRow>(
+        `WITH inserted AS (
+           INSERT INTO plans (
+             key, name, description, kind, self_service_eligible, admin_grantable,
+             duration_days, request_quota, one_time_per_organization,
+             created_by, updated_by
+           ) VALUES ($1,$2,$3,$4::plan_kind,$5,$6,$7,$8,$9,$10,$10)
+           RETURNING *
+         )
+         SELECT ${SELECT_COLUMNS} FROM inserted p`,
+        [
+          input.key,
+          input.name,
+          input.description ?? null,
+          input.kind,
+          input.selfServiceEligible ?? false,
+          input.adminGrantable ?? true,
+          input.durationDays ?? null,
+          input.requestQuota,
+          // Free trials default to one-time-per-organization so a tenant cannot
+          // re-claim a trial repeatedly; other kinds default to repeatable.
+          input.oneTimePerOrganization ?? input.kind === "free_trial",
+          adminUserId,
+        ],
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error("plan_insert_failed");
+      const plan = mapRow(row);
+      await insertAuditEvent(client, {
+        organizationId: null,
+        actor: { actorUserId: adminUserId },
+        action: "plan.created",
+        targetType: "plan",
+        targetId: plan.id,
+        afterSummary: {
+          key: plan.key,
+          name: plan.name,
+          kind: plan.kind,
+          requestQuota: plan.requestQuota,
+          selfServiceEligible: plan.selfServiceEligible,
+          adminGrantable: plan.adminGrantable,
+          oneTimePerOrganization: plan.oneTimePerOrganization,
+          durationDays: plan.durationDays ?? null,
+        },
+        requestId,
+      });
+      await client.query("COMMIT");
+      return plan;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore — the transaction was already resolved.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async update(
     id: string,
     patch: PlanPatch,
     adminUserId: string,
+    requestId: string,
   ): Promise<Plan | undefined> {
     // Fail closed on any out-of-range / malformed patch field before touching
     // the DB (name/description/duration/quota bounds + boolean policy flags).
@@ -112,9 +153,13 @@ export class PostgresPlanRepository implements PlanRepository {
     // accepts null to clear the window.
     const sets: string[] = [];
     const values: unknown[] = [id];
+    // Sorted list of changed column names recorded in the audit summary (never
+    // the new values themselves).
+    const changed: string[] = [];
     const push = (column: string, value: unknown): void => {
       values.push(value);
       sets.push(`${column} = $${values.length}`);
+      changed.push(column);
     };
     if (patch.name !== undefined) push("name", patch.name);
     if (patch.description !== undefined)
@@ -135,18 +180,46 @@ export class PostgresPlanRepository implements PlanRepository {
       // Nothing to change other than the actor/version bookkeeping.
       sets.push("updated_at = now()");
     }
-    const result = await this.pool.query<PlanRow>(
-      `WITH updated AS (
-         UPDATE plans
-         SET ${sets.join(", ")}, updated_by = ${actorParam}, updated_at = now(), version = version + 1
-         WHERE id = $1
-         RETURNING *
-       )
-       SELECT ${SELECT_COLUMNS} FROM updated p`,
-      values,
-    );
-    const row = result.rows[0];
-    return row ? mapRow(row) : undefined;
+    const client: PoolClient = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<PlanRow>(
+        `WITH updated AS (
+           UPDATE plans
+           SET ${sets.join(", ")}, updated_by = ${actorParam}, updated_at = now(), version = version + 1
+           WHERE id = $1
+           RETURNING *
+         )
+         SELECT ${SELECT_COLUMNS} FROM updated p`,
+        values,
+      );
+      const row = result.rows[0];
+      if (!row) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const plan = mapRow(row);
+      await insertAuditEvent(client, {
+        organizationId: null,
+        actor: { actorUserId: adminUserId },
+        action: "plan.updated",
+        targetType: "plan",
+        targetId: plan.id,
+        afterSummary: { fields: [...changed].sort(), version: plan.version },
+        requestId,
+      });
+      await client.query("COMMIT");
+      return plan;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore — the transaction was already resolved.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private async setFlag(
@@ -154,57 +227,162 @@ export class PostgresPlanRepository implements PlanRepository {
     column: "enabled" | "published",
     value: boolean,
     adminUserId: string,
+    requestId: string,
   ): Promise<Plan | undefined> {
-    const result = await this.pool.query<PlanRow>(
-      `WITH updated AS (
-         UPDATE plans
-         SET ${column} = $2, updated_by = $3, updated_at = now(), version = version + 1
-         WHERE id = $1
-         RETURNING *
-       )
-       SELECT ${SELECT_COLUMNS} FROM updated p`,
-      [id, value, adminUserId],
-    );
-    const row = result.rows[0];
-    return row ? mapRow(row) : undefined;
+    const client: PoolClient = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<PlanRow>(
+        `WITH updated AS (
+           UPDATE plans
+           SET ${column} = $2, updated_by = $3, updated_at = now(), version = version + 1
+           WHERE id = $1
+           RETURNING *
+         )
+         SELECT ${SELECT_COLUMNS} FROM updated p`,
+        [id, value, adminUserId],
+      );
+      const row = result.rows[0];
+      if (!row) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const plan = mapRow(row);
+      const action =
+        column === "enabled"
+          ? value
+            ? "plan.enabled"
+            : "plan.disabled"
+          : value
+            ? "plan.published"
+            : "plan.unpublished";
+      await insertAuditEvent(client, {
+        organizationId: null,
+        actor: { actorUserId: adminUserId },
+        action,
+        targetType: "plan",
+        targetId: plan.id,
+        afterSummary:
+          column === "enabled"
+            ? { enabled: plan.enabled }
+            : { published: plan.published },
+        requestId,
+      });
+      await client.query("COMMIT");
+      return plan;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore — the transaction was already resolved.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   setEnabled(
     id: string,
     enabled: boolean,
     adminUserId: string,
+    requestId: string,
   ): Promise<Plan | undefined> {
-    return this.setFlag(id, "enabled", enabled, adminUserId);
+    return this.setFlag(id, "enabled", enabled, adminUserId, requestId);
   }
 
   setPublished(
     id: string,
     published: boolean,
     adminUserId: string,
+    requestId: string,
   ): Promise<Plan | undefined> {
-    return this.setFlag(id, "published", published, adminUserId);
+    return this.setFlag(id, "published", published, adminUserId, requestId);
   }
 
   async attachCatalogueEntry(
     planId: string,
     catalogueEntryId: string,
+    adminUserId: string,
+    requestId: string,
   ): Promise<Plan | undefined> {
-    await this.pool.query(
-      `INSERT INTO plan_catalogue_entries (plan_id, catalogue_entry_id)
-       VALUES ($1,$2) ON CONFLICT DO NOTHING`,
-      [planId, catalogueEntryId],
-    );
+    // Do the write + audit in ONE transaction; the follow-up findById read runs
+    // after COMMIT (it only reflects the just-committed state).
+    const client: PoolClient = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const inserted = await client.query(
+        `INSERT INTO plan_catalogue_entries (plan_id, catalogue_entry_id)
+         VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+        [planId, catalogueEntryId],
+      );
+      // No-op (offering already attached, or plan gone) writes no audit row —
+      // matching every other repo path's invariant.
+      if ((inserted.rowCount ?? 0) === 0) {
+        await client.query("ROLLBACK");
+        return this.findById(planId);
+      }
+      await insertAuditEvent(client, {
+        organizationId: null,
+        actor: { actorUserId: adminUserId },
+        action: "plan.offering_attached",
+        targetType: "plan",
+        targetId: planId,
+        afterSummary: { catalogueEntryId },
+        requestId,
+      });
+      await client.query("COMMIT");
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore — the transaction was already resolved.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
     return this.findById(planId);
   }
 
   async detachCatalogueEntry(
     planId: string,
     catalogueEntryId: string,
+    adminUserId: string,
+    requestId: string,
   ): Promise<Plan | undefined> {
-    await this.pool.query(
-      "DELETE FROM plan_catalogue_entries WHERE plan_id = $1 AND catalogue_entry_id = $2",
-      [planId, catalogueEntryId],
-    );
+    const client: PoolClient = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const deleted = await client.query(
+        "DELETE FROM plan_catalogue_entries WHERE plan_id = $1 AND catalogue_entry_id = $2",
+        [planId, catalogueEntryId],
+      );
+      // No-op (offering was not attached) writes no audit row.
+      if ((deleted.rowCount ?? 0) === 0) {
+        await client.query("ROLLBACK");
+        return this.findById(planId);
+      }
+      await insertAuditEvent(client, {
+        organizationId: null,
+        actor: { actorUserId: adminUserId },
+        action: "plan.offering_detached",
+        targetType: "plan",
+        targetId: planId,
+        afterSummary: { catalogueEntryId },
+        requestId,
+      });
+      await client.query("COMMIT");
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore — the transaction was already resolved.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
     return this.findById(planId);
   }
 

@@ -113,9 +113,11 @@ export async function mintTokenAction(formData: FormData): Promise<MintResult> {
     return { ok: false, message: "Choose how to scope this token." };
   }
 
+  const requestId = globalThis.crypto.randomUUID();
   try {
     const minted = await createPersonalAccessToken({
       name,
+      requestId,
       ...(expiresAt ? { expiresAt } : {}),
       ...(scopeCatalogueEntryIds !== undefined ? { scopeCatalogueEntryIds } : {}),
     });
@@ -145,8 +147,9 @@ export async function revokeTokenAction(
   if (typeof id !== "string" || id.length === 0) {
     return { ok: false, message: "A token must be selected." };
   }
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    await revokePersonalAccessToken(id);
+    await revokePersonalAccessToken(id, requestId);
     revalidatePath("/account/tokens");
     return { ok: true };
   } catch (error) {

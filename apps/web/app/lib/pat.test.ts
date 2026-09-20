@@ -12,6 +12,7 @@ import { AuthzError, type AuthzDeps, type Session } from "./session";
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const ORG_ID = "22222222-2222-4222-8222-222222222222";
 const PAT_ID = "33333333-3333-4333-8333-333333333333";
+const REQ = "req-pat";
 
 function authzFor(
   shape: { authenticated?: boolean; userActive?: boolean } = {},
@@ -78,7 +79,7 @@ describe("createPersonalAccessToken", () => {
   it("mints a token for the caller's personal org and returns it once", async () => {
     const service = serviceMock();
     const result = await createPersonalAccessToken(
-      { name: "laptop" },
+      { name: "laptop", requestId: REQ },
       {
         authz: authzFor(),
         service,
@@ -90,6 +91,7 @@ describe("createPersonalAccessToken", () => {
       userId: USER_ID,
       organizationId: ORG_ID,
       name: "laptop",
+      requestId: REQ,
     });
   });
 
@@ -97,7 +99,7 @@ describe("createPersonalAccessToken", () => {
     const service = serviceMock();
     const expiresAt = new Date("2026-12-31T00:00:00.000Z");
     await createPersonalAccessToken(
-      { name: "temp", expiresAt },
+      { name: "temp", expiresAt, requestId: REQ },
       {
         authz: authzFor(),
         service,
@@ -108,6 +110,7 @@ describe("createPersonalAccessToken", () => {
       userId: USER_ID,
       organizationId: ORG_ID,
       name: "temp",
+      requestId: REQ,
       expiresAt,
     });
   });
@@ -119,7 +122,7 @@ describe("createPersonalAccessToken", () => {
       "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     ];
     await createPersonalAccessToken(
-      { name: "scoped", scopeCatalogueEntryIds },
+      { name: "scoped", scopeCatalogueEntryIds, requestId: REQ },
       {
         authz: authzFor(),
         service,
@@ -130,6 +133,7 @@ describe("createPersonalAccessToken", () => {
       userId: USER_ID,
       organizationId: ORG_ID,
       name: "scoped",
+      requestId: REQ,
       scopeCatalogueEntryIds,
     });
   });
@@ -139,7 +143,7 @@ describe("createPersonalAccessToken", () => {
     expect(
       await reasonOf(() =>
         createPersonalAccessToken(
-          { name: "laptop" },
+          { name: "laptop", requestId: REQ },
           {
             authz: authzFor(),
             service,
@@ -157,7 +161,7 @@ describe("createPersonalAccessToken", () => {
     expect(
       await reasonOf(() =>
         createPersonalAccessToken(
-          { name: "laptop" },
+          { name: "laptop", requestId: REQ },
           {
             authz: authzFor({ authenticated: false }),
             service,
@@ -174,18 +178,21 @@ describe("createPersonalAccessToken", () => {
 describe("revokePersonalAccessToken", () => {
   it("revokes the caller's own token by id", async () => {
     const service = serviceMock();
-    const revoked = await revokePersonalAccessToken(PAT_ID, {
+    const revoked = await revokePersonalAccessToken(PAT_ID, REQ, {
       authz: authzFor(),
       service,
     });
     expect(revoked?.status).toBe("revoked");
-    expect(service.revoke).toHaveBeenCalledWith(PAT_ID, USER_ID);
+    expect(service.revoke).toHaveBeenCalledWith(PAT_ID, USER_ID, REQ);
   });
 
   it("rejects a malformed id without touching the service", async () => {
     const service = serviceMock();
     await expect(
-      revokePersonalAccessToken("not-a-uuid", { authz: authzFor(), service }),
+      revokePersonalAccessToken("not-a-uuid", REQ, {
+        authz: authzFor(),
+        service,
+      }),
     ).rejects.toBeInstanceOf(PatInputError);
     expect(service.revoke).not.toHaveBeenCalled();
   });
@@ -194,7 +201,7 @@ describe("revokePersonalAccessToken", () => {
     const service = serviceMock();
     expect(
       await reasonOf(() =>
-        revokePersonalAccessToken(PAT_ID, {
+        revokePersonalAccessToken(PAT_ID, REQ, {
           authz: authzFor({ authenticated: false }),
           service,
         }),

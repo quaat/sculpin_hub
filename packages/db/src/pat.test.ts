@@ -147,7 +147,12 @@ describe("PostgresPatService.mint", () => {
     const { pool, calls } = fakePool({});
     const service = new PostgresPatService(pool, KEYRING);
     await expect(
-      service.mint({ userId: "u", organizationId: "o", name: "  " }),
+      service.mint({
+        userId: "u",
+        organizationId: "o",
+        name: "  ",
+        requestId: "req-mint",
+      }),
     ).rejects.toThrow();
     expect(calls).toHaveLength(0);
   });
@@ -156,7 +161,9 @@ describe("PostgresPatService.mint", () => {
     let insertedParams: unknown[] = [];
     const { pool } = fakePool({
       onInsert: (params) => {
-        insertedParams = params ?? [];
+        // Capture ONLY the personal_access_tokens insert (7 params), not the
+        // audit_events insert that rides in the same transaction.
+        if ((params ?? []).length === 7) insertedParams = params ?? [];
         return findingInsert();
       },
       onSelect: findingSelect,
@@ -166,6 +173,7 @@ describe("PostgresPatService.mint", () => {
       userId: "11111111-1111-1111-1111-111111111111",
       organizationId: "22222222-2222-2222-2222-222222222222",
       name: "My laptop",
+      requestId: "req-mint",
     });
 
     const parsed = parsePatToken(token);
@@ -203,6 +211,7 @@ describe("PostgresPatService.mint", () => {
         organizationId: "o",
         name: "scoped",
         scopeCatalogueEntryIds: scopeIds,
+        requestId: "req-mint",
       }),
     ).rejects.toThrow(/do not exist/i);
     // The transaction rolled back and the client was released.
@@ -220,6 +229,7 @@ describe("PostgresPatService.mint", () => {
         organizationId: "o",
         name: "bad-scope",
         scopeCatalogueEntryIds: ["not-a-uuid"],
+        requestId: "req-mint",
       }),
     ).rejects.toThrow();
     expect(calls).toHaveLength(0);
@@ -265,6 +275,7 @@ describe("PAT logging hygiene (CLAUDE.md rule 5)", () => {
         userId: "u",
         organizationId: "o",
         name: "n",
+        requestId: "req-mint",
       });
       await service.authenticate(minted.token);
       await service.authenticate(token);

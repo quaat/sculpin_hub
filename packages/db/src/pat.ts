@@ -13,6 +13,7 @@ import {
   type UserId,
 } from "@sculpin/domain";
 import type { Pool, PoolClient } from "pg";
+import { insertAuditEvent } from "./audit.js";
 
 const BASE62_ALPHABET =
   "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -121,6 +122,8 @@ export interface MintPatCommand {
    * `catalogue_entries` or the entire mint rolls back.
    */
   readonly scopeCatalogueEntryIds?: readonly string[];
+  /** Safe correlation id recorded on the mint audit event. */
+  readonly requestId: string;
 }
 
 function assertKeyring(keyring: PatKeyring): void {
@@ -226,6 +229,24 @@ export class PostgresPatService {
       }
       const row = await this.selectRow(client, patId);
       if (!row) throw new Error("pat_insert_failed");
+      // Audit the mint in the SAME transaction. The user is the org's
+      // owner-member, so the event is org-scoped and the composite membership FK
+      // is satisfied. The summary carries ONLY safe metadata — NEVER the token,
+      // the secret, or its HMAC digest (CLAUDE.md rules 2, 5).
+      await insertAuditEvent(client, {
+        organizationId: command.organizationId,
+        actor: { actorUserId: command.userId },
+        action: "pat.minted",
+        targetType: "personal_access_token",
+        targetId: patId,
+        afterSummary: {
+          name: command.name.trim(),
+          scoped: scopeIds.length > 0,
+          scopeCount: scopeIds.length,
+          expiresAt: command.expiresAt ? command.expiresAt.toISOString() : null,
+        },
+        requestId: command.requestId,
+      });
       await client.query("COMMIT");
       return { record: mapRow(row), token };
     } catch (error) {
@@ -313,20 +334,54 @@ export class PostgresPatService {
    * unknown token returns `undefined`. Scoped to the owner so a caller can only
    * revoke their own tokens.
    */
-  async revoke(id: string, userId: UserId): Promise<PatRecord | undefined> {
+  async revoke(
+    id: string,
+    userId: UserId,
+    requestId: string,
+  ): Promise<PatRecord | undefined> {
     // RETURNING sees the POST-update row; the scope aggregate rides along as a
     // correlated subquery (scopes are immutable, so they are unaffected by the
     // status change). `pat` is the UPDATE target alias so PAT_SELECT_COLUMNS and
-    // SCOPE_AGG resolve unchanged.
-    const result = await this.pool.query<PatRow>(
-      `UPDATE personal_access_tokens AS pat
-       SET status = 'revoked', revoked_at = now(), updated_at = now(), version = version + 1
-       WHERE pat.id = $1 AND pat.user_id = $2 AND pat.status = 'active'
-       RETURNING ${PAT_SELECT_COLUMNS}`,
-      [id, userId],
-    );
-    const row = result.rows[0];
-    return row ? mapRow(row) : undefined;
+    // SCOPE_AGG resolve unchanged. The revoke + its audit row commit together.
+    const client: PoolClient = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<PatRow>(
+        `UPDATE personal_access_tokens AS pat
+         SET status = 'revoked', revoked_at = now(), updated_at = now(), version = version + 1
+         WHERE pat.id = $1 AND pat.user_id = $2 AND pat.status = 'active'
+         RETURNING ${PAT_SELECT_COLUMNS}`,
+        [id, userId],
+      );
+      const row = result.rows[0];
+      if (!row) {
+        // Unknown / already-revoked token: idempotent no-op, no audit row.
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const record = mapRow(row);
+      await insertAuditEvent(client, {
+        organizationId: record.organizationId,
+        actor: { actorUserId: userId },
+        action: "pat.revoked",
+        targetType: "personal_access_token",
+        targetId: id,
+        beforeSummary: { status: "active" },
+        afterSummary: { status: "revoked" },
+        requestId,
+      });
+      await client.query("COMMIT");
+      return record;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore — the transaction was already resolved.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listForUser(userId: UserId): Promise<readonly PatRecord[]> {

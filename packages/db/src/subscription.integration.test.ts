@@ -30,7 +30,6 @@ const enabled = process.env.RUN_DATABASE_INTEGRATION === "true";
 const suite = enabled ? describe : describe.skip;
 
 const FREE_TRIAL_PLAN_ID = "00000000-0000-4000-8000-0000000f7a11";
-const ACTOR = "00000000-0000-4000-8000-000000000abc";
 const PAT_KEY = "integration-subscription-usage-hash-0123456789abcdef";
 const KEYRING: PatKeyring = {
   currentVersion: 1,
@@ -69,6 +68,7 @@ suite("subscription repository", () => {
         displayName: `Offering ${seq}`,
       },
       userId,
+      `req-off-${seq}`,
     );
     return entry.id;
   }
@@ -104,6 +104,7 @@ suite("subscription repository", () => {
       userId,
       organizationId,
       name: `usage-${seq}`,
+      requestId: `usage-mint-${seq}`,
     });
     return {
       catalogueEntryId,
@@ -163,11 +164,16 @@ suite("subscription repository", () => {
   async function grantWithOffering(
     organizationId: string,
     catalogueEntryId: string,
+    actorUserId: string,
     overrides: { requestQuota?: number; durationDays?: number | null } = {},
   ): Promise<string> {
     const planId = await createPlan(overrides);
     await attachOffering(planId, catalogueEntryId);
-    const sub = await repository.grantFromPlan(organizationId, planId, ACTOR);
+    const sub = await repository.grantFromPlan(organizationId, planId, {
+      actorUserId,
+      requestId: `grant-${planId}`,
+      viaAdmin: false,
+    });
     return sub.id;
   }
 
@@ -188,11 +194,11 @@ suite("subscription repository", () => {
   });
 
   it("grantFromPlan materializes an active subscription with the plan quota", async () => {
-    const { organizationId } = await provisionOrg();
+    const { userId, organizationId } = await provisionOrg();
     const granted = await repository.grantFromPlan(
       organizationId,
       FREE_TRIAL_PLAN_ID,
-      ACTOR,
+      { actorUserId: userId, requestId: "grant-free-trial", viaAdmin: false },
     );
     expect(granted.status).toBe("active");
     expect(granted.planKind).toBe("free_trial");
@@ -207,11 +213,15 @@ suite("subscription repository", () => {
   });
 
   it("rejects granting a disabled plan", async () => {
-    const { organizationId } = await provisionOrg();
+    const { userId, organizationId } = await provisionOrg();
     const planId = await createPlan();
     await pool.query("UPDATE plans SET enabled=false WHERE id=$1", [planId]);
     await expect(
-      repository.grantFromPlan(organizationId, planId, ACTOR),
+      repository.grantFromPlan(organizationId, planId, {
+        actorUserId: userId,
+        requestId: "grant-disabled",
+        viaAdmin: false,
+      }),
     ).rejects.toThrow(/disabled/i);
     expect(await repository.listForOrganization(organizationId)).toHaveLength(0);
   });
@@ -219,7 +229,7 @@ suite("subscription repository", () => {
   it("reserves offering-bound quota atomically and records a matching usage row", async () => {
     const { userId, organizationId } = await provisionOrg();
     const offering = await createOffering(userId);
-    const subId = await grantWithOffering(organizationId, offering, {
+    const subId = await grantWithOffering(organizationId, offering, userId, {
       requestQuota: 200,
     });
     const usage = await mintUsage(userId, organizationId, offering);
@@ -268,7 +278,7 @@ suite("subscription repository", () => {
   it("writes NO usage row when the reservation is denied for exhaustion", async () => {
     const { userId, organizationId } = await provisionOrg();
     const offering = await createOffering(userId);
-    const subId = await grantWithOffering(organizationId, offering, {
+    const subId = await grantWithOffering(organizationId, offering, userId, {
       requestQuota: 1,
     });
     await pool.query("UPDATE subscriptions SET quota_used=1 WHERE id=$1", [
@@ -284,7 +294,7 @@ suite("subscription repository", () => {
   it("never over-draws under a concurrent last-quota stampede (single subscription)", async () => {
     const { userId, organizationId } = await provisionOrg();
     const offering = await createOffering(userId);
-    const subId = await grantWithOffering(organizationId, offering, {
+    const subId = await grantWithOffering(organizationId, offering, userId, {
       requestQuota: 5,
     });
     const usage = await mintUsage(userId, organizationId, offering);
@@ -306,26 +316,29 @@ suite("subscription repository", () => {
   it("supports suspend/resume lifecycle then terminal cancellation", async () => {
     const { userId, organizationId } = await provisionOrg();
     const offering = await createOffering(userId);
-    await grantWithOffering(organizationId, offering, { requestQuota: 200 });
+    await grantWithOffering(organizationId, offering, userId, { requestQuota: 200 });
     const usage = await mintUsage(userId, organizationId, offering);
     const [sub] = await repository.listForOrganization(organizationId);
+    const actor = { actorUserId: userId, requestId: "status-change" };
     // Suspend: no longer entitling.
-    const suspended = await repository.setStatus(sub!.id, "suspended");
+    const suspended = await repository.setStatus(sub!.id, "suspended", actor);
     expect(suspended?.status).toBe("suspended");
     expect(
       (await repository.reserveQuota(organizationId, 1, usage)).granted,
     ).toBe(false);
     // Resume: entitling again.
-    const resumed = await repository.setStatus(sub!.id, "active");
+    const resumed = await repository.setStatus(sub!.id, "active", actor);
     expect(resumed?.status).toBe("active");
     expect(
       (await repository.reserveQuota(organizationId, 1, usage)).granted,
     ).toBe(true);
     // Cancel (terminal): stamps ends_at and no longer entitles.
-    const canceled = await repository.setStatus(sub!.id, "canceled");
+    const canceled = await repository.setStatus(sub!.id, "canceled", actor);
     expect(canceled?.status).toBe("canceled");
     expect(canceled?.endsAt).toBeInstanceOf(Date);
-    expect(await repository.setStatus(sub!.id, "expired")).toBeUndefined();
+    expect(
+      await repository.setStatus(sub!.id, "expired", actor),
+    ).toBeUndefined();
     expect(
       (await repository.reserveQuota(organizationId, 1, usage)).granted,
     ).toBe(false);
@@ -336,10 +349,10 @@ suite("subscription repository", () => {
   it("pools quota across multiple subscriptions granting the SAME offering", async () => {
     const { userId, organizationId } = await provisionOrg();
     const offering = await createOffering(userId);
-    const subA = await grantWithOffering(organizationId, offering, {
+    const subA = await grantWithOffering(organizationId, offering, userId, {
       requestQuota: 10,
     });
-    const subB = await grantWithOffering(organizationId, offering, {
+    const subB = await grantWithOffering(organizationId, offering, userId, {
       requestQuota: 10,
     });
     const usage = await mintUsage(userId, organizationId, offering);
@@ -366,10 +379,10 @@ suite("subscription repository", () => {
   it("never over-draws when pooling across two subscriptions for the same offering", async () => {
     const { userId, organizationId } = await provisionOrg();
     const offering = await createOffering(userId);
-    const subA = await grantWithOffering(organizationId, offering, {
+    const subA = await grantWithOffering(organizationId, offering, userId, {
       requestQuota: 3,
     });
-    const subB = await grantWithOffering(organizationId, offering, {
+    const subB = await grantWithOffering(organizationId, offering, userId, {
       requestQuota: 2,
     });
     const usage = await mintUsage(userId, organizationId, offering);
@@ -391,14 +404,14 @@ suite("subscription repository", () => {
     const offeringA = await createOffering(userId);
     const offeringB = await createOffering(userId);
     // Subscription A grants offering A but is exhausted.
-    const subA = await grantWithOffering(organizationId, offeringA, {
+    const subA = await grantWithOffering(organizationId, offeringA, userId, {
       requestQuota: 1,
     });
     await pool.query("UPDATE subscriptions SET quota_used=1 WHERE id=$1", [
       subA,
     ]);
     // Subscription B grants offering B and has ample quota.
-    const subB = await grantWithOffering(organizationId, offeringB, {
+    const subB = await grantWithOffering(organizationId, offeringB, userId, {
       requestQuota: 100,
     });
     const usageA = await mintUsage(userId, organizationId, offeringA);
@@ -417,10 +430,10 @@ suite("subscription repository", () => {
     const { userId, organizationId } = await provisionOrg();
     const offeringA = await createOffering(userId);
     const offeringB = await createOffering(userId);
-    const subA = await grantWithOffering(organizationId, offeringA, {
+    const subA = await grantWithOffering(organizationId, offeringA, userId, {
       requestQuota: 50,
     });
-    const subB = await grantWithOffering(organizationId, offeringB, {
+    const subB = await grantWithOffering(organizationId, offeringB, userId, {
       requestQuota: 50,
     });
     const usageA = await mintUsage(userId, organizationId, offeringA);

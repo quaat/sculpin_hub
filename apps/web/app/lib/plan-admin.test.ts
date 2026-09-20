@@ -16,6 +16,7 @@ import { AuthzError, type AuthzDeps, type Session } from "./session";
 const ADMIN_ID = "11111111-1111-4111-8111-111111111111";
 const PLAN_ID = "22222222-2222-4222-8222-222222222222";
 const ENTRY_ID = "33333333-3333-4333-8333-333333333333";
+const REQ = "req-plan-admin";
 
 function authzFor(role: "user" | "admin" | "none"): Partial<AuthzDeps> {
   const emptyOrg = () =>
@@ -105,37 +106,37 @@ describe("plan-admin requireAdmin gating", () => {
     {
       label: "createPlan",
       call: (repository, authz) =>
-        createPlan(planInput, { authz, repository }),
+        createPlan(planInput, REQ, { authz, repository }),
       probe: (r) => r.create,
     },
     {
       label: "updatePlan",
       call: (repository, authz) =>
-        updatePlan(PLAN_ID, { name: "New" }, { authz, repository }),
+        updatePlan(PLAN_ID, { name: "New" }, REQ, { authz, repository }),
       probe: (r) => r.update,
     },
     {
       label: "setPlanEnabled",
       call: (repository, authz) =>
-        setPlanEnabled(PLAN_ID, false, { authz, repository }),
+        setPlanEnabled(PLAN_ID, false, REQ, { authz, repository }),
       probe: (r) => r.setEnabled,
     },
     {
       label: "setPlanPublished",
       call: (repository, authz) =>
-        setPlanPublished(PLAN_ID, true, { authz, repository }),
+        setPlanPublished(PLAN_ID, true, REQ, { authz, repository }),
       probe: (r) => r.setPublished,
     },
     {
       label: "attachPlanCatalogueEntry",
       call: (repository, authz) =>
-        attachPlanCatalogueEntry(PLAN_ID, ENTRY_ID, { authz, repository }),
+        attachPlanCatalogueEntry(PLAN_ID, ENTRY_ID, REQ, { authz, repository }),
       probe: (r) => r.attachCatalogueEntry,
     },
     {
       label: "detachPlanCatalogueEntry",
       call: (repository, authz) =>
-        detachPlanCatalogueEntry(PLAN_ID, ENTRY_ID, { authz, repository }),
+        detachPlanCatalogueEntry(PLAN_ID, ENTRY_ID, REQ, { authz, repository }),
       probe: (r) => r.detachCatalogueEntry,
     },
     {
@@ -171,18 +172,18 @@ describe("plan-admin happy-path forwarding", () => {
   it("createPlan forwards to the repo with the acting admin id", async () => {
     const repository = mockRepository();
     repository.create.mockResolvedValue(samplePlan);
-    const result = await createPlan(planInput, {
+    const result = await createPlan(planInput, REQ, {
       authz: authzFor("admin"),
       repository: repository as unknown as PlanRepository,
     });
     expect(result).toBe(samplePlan);
-    expect(repository.create).toHaveBeenCalledWith(planInput, ADMIN_ID);
+    expect(repository.create).toHaveBeenCalledWith(planInput, ADMIN_ID, REQ);
   });
 
   it("updatePlan forwards patch + admin id", async () => {
     const repository = mockRepository();
     repository.update.mockResolvedValue(samplePlan);
-    await updatePlan(PLAN_ID, { name: "New" }, {
+    await updatePlan(PLAN_ID, { name: "New" }, REQ, {
       authz: authzFor("admin"),
       repository: repository as unknown as PlanRepository,
     });
@@ -190,6 +191,7 @@ describe("plan-admin happy-path forwarding", () => {
       PLAN_ID,
       { name: "New" },
       ADMIN_ID,
+      REQ,
     );
   });
 
@@ -197,32 +199,52 @@ describe("plan-admin happy-path forwarding", () => {
     const repository = mockRepository();
     repository.setEnabled.mockResolvedValue(samplePlan);
     repository.setPublished.mockResolvedValue(samplePlan);
-    await setPlanEnabled(PLAN_ID, false, {
+    await setPlanEnabled(PLAN_ID, false, REQ, {
       authz: authzFor("admin"),
       repository: repository as unknown as PlanRepository,
     });
-    await setPlanPublished(PLAN_ID, true, {
+    await setPlanPublished(PLAN_ID, true, REQ, {
       authz: authzFor("admin"),
       repository: repository as unknown as PlanRepository,
     });
-    expect(repository.setEnabled).toHaveBeenCalledWith(PLAN_ID, false, ADMIN_ID);
-    expect(repository.setPublished).toHaveBeenCalledWith(PLAN_ID, true, ADMIN_ID);
+    expect(repository.setEnabled).toHaveBeenCalledWith(
+      PLAN_ID,
+      false,
+      ADMIN_ID,
+      REQ,
+    );
+    expect(repository.setPublished).toHaveBeenCalledWith(
+      PLAN_ID,
+      true,
+      ADMIN_ID,
+      REQ,
+    );
   });
 
   it("attach / detach forward plan + entry ids", async () => {
     const repository = mockRepository();
     repository.attachCatalogueEntry.mockResolvedValue(samplePlan);
     repository.detachCatalogueEntry.mockResolvedValue(samplePlan);
-    await attachPlanCatalogueEntry(PLAN_ID, ENTRY_ID, {
+    await attachPlanCatalogueEntry(PLAN_ID, ENTRY_ID, REQ, {
       authz: authzFor("admin"),
       repository: repository as unknown as PlanRepository,
     });
-    await detachPlanCatalogueEntry(PLAN_ID, ENTRY_ID, {
+    await detachPlanCatalogueEntry(PLAN_ID, ENTRY_ID, REQ, {
       authz: authzFor("admin"),
       repository: repository as unknown as PlanRepository,
     });
-    expect(repository.attachCatalogueEntry).toHaveBeenCalledWith(PLAN_ID, ENTRY_ID);
-    expect(repository.detachCatalogueEntry).toHaveBeenCalledWith(PLAN_ID, ENTRY_ID);
+    expect(repository.attachCatalogueEntry).toHaveBeenCalledWith(
+      PLAN_ID,
+      ENTRY_ID,
+      ADMIN_ID,
+      REQ,
+    );
+    expect(repository.detachCatalogueEntry).toHaveBeenCalledWith(
+      PLAN_ID,
+      ENTRY_ID,
+      ADMIN_ID,
+      REQ,
+    );
   });
 
   it("listPlansForAdmin / getPlanForAdmin forward to the repo", async () => {
@@ -257,19 +279,19 @@ describe("plan-admin uuid validation", () => {
     {
       label: "updatePlan",
       call: (repository, authz) =>
-        updatePlan("not-a-uuid", { name: "x" }, { authz, repository }),
+        updatePlan("not-a-uuid", { name: "x" }, REQ, { authz, repository }),
       probe: (r) => r.update,
     },
     {
       label: "setPlanEnabled",
       call: (repository, authz) =>
-        setPlanEnabled("not-a-uuid", true, { authz, repository }),
+        setPlanEnabled("not-a-uuid", true, REQ, { authz, repository }),
       probe: (r) => r.setEnabled,
     },
     {
       label: "setPlanPublished",
       call: (repository, authz) =>
-        setPlanPublished("not-a-uuid", true, { authz, repository }),
+        setPlanPublished("not-a-uuid", true, REQ, { authz, repository }),
       probe: (r) => r.setPublished,
     },
     {
@@ -281,7 +303,10 @@ describe("plan-admin uuid validation", () => {
     {
       label: "attachPlanCatalogueEntry (bad entry id)",
       call: (repository, authz) =>
-        attachPlanCatalogueEntry(PLAN_ID, "not-a-uuid", { authz, repository }),
+        attachPlanCatalogueEntry(PLAN_ID, "not-a-uuid", REQ, {
+          authz,
+          repository,
+        }),
       probe: (r) => r.attachCatalogueEntry,
     },
   ];

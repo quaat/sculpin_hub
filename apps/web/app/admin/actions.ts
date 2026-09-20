@@ -82,8 +82,9 @@ export async function publishCatalogueAction(
   formData: FormData,
 ): Promise<ActionResult> {
   const id = str(formData, "id");
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    await publishCatalogueEntry(id);
+    await publishCatalogueEntry(id, requestId);
     revalidatePath("/admin/catalogue");
     return { ok: true, message: "Published." };
   } catch (error) {
@@ -98,8 +99,9 @@ export async function unpublishCatalogueAction(
   formData: FormData,
 ): Promise<ActionResult> {
   const id = str(formData, "id");
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    await unpublishCatalogueEntry(id);
+    await unpublishCatalogueEntry(id, requestId);
     revalidatePath("/admin/catalogue");
     return { ok: true, message: "Unpublished." };
   } catch (error) {
@@ -131,8 +133,9 @@ export async function updateCatalogueMetadataAction(
     description: description.length > 0 ? description : null,
     accessInstructions: accessInstructions.length > 0 ? accessInstructions : null,
   };
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    const updated = await updateCatalogueMetadata(id, patch);
+    const updated = await updateCatalogueMetadata(id, patch, requestId);
     revalidatePath("/admin/catalogue");
     if (!updated) return { ok: false, message: "Catalogue entry not found." };
     return { ok: true, message: "Catalogue entry updated." };
@@ -159,14 +162,18 @@ export async function createFromDiscoveredAction(
   const description = str(formData, "description");
   const accessInstructions = str(formData, "accessInstructions");
   const upstreamAgentId = str(formData, "upstreamAgentId");
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    await createCatalogueEntryFromDiscovered({
-      publicAlias,
-      displayName,
-      upstreamAgentId,
-      ...(description.length > 0 ? { description } : {}),
-      ...(accessInstructions.length > 0 ? { accessInstructions } : {}),
-    });
+    await createCatalogueEntryFromDiscovered(
+      {
+        publicAlias,
+        displayName,
+        upstreamAgentId,
+        ...(description.length > 0 ? { description } : {}),
+        ...(accessInstructions.length > 0 ? { accessInstructions } : {}),
+      },
+      requestId,
+    );
     revalidatePath("/admin/catalogue");
     revalidatePath("/admin/discovery");
     return { ok: true, message: "Catalogue entry created." };
@@ -243,8 +250,9 @@ export async function createPlanAction(
     ...(description.length > 0 ? { description } : {}),
     ...(durationDays !== undefined ? { durationDays } : {}),
   };
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    await createPlan(input);
+    await createPlan(input, requestId);
     revalidatePath("/admin/plans");
     return { ok: true, message: "Plan created." };
   } catch (error) {
@@ -297,8 +305,9 @@ export async function updatePlanAction(
     adminGrantable: formData.get("adminGrantable") === "on",
     oneTimePerOrganization: formData.get("oneTimePerOrganization") === "on",
   };
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    const updated = await updatePlan(id, patch);
+    const updated = await updatePlan(id, patch, requestId);
     revalidatePath("/admin/plans");
     if (!updated) return { ok: false, message: "Plan not found." };
     return { ok: true, message: "Plan updated." };
@@ -318,8 +327,9 @@ export async function setPlanEnabledAction(
 ): Promise<ActionResult> {
   const id = str(formData, "id");
   const enabled = str(formData, "enabled") === "true";
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    await setPlanEnabled(id, enabled);
+    await setPlanEnabled(id, enabled, requestId);
     revalidatePath("/admin/plans");
     return { ok: true, message: enabled ? "Enabled." : "Disabled." };
   } catch (error) {
@@ -335,8 +345,9 @@ export async function setPlanPublishedAction(
 ): Promise<ActionResult> {
   const id = str(formData, "id");
   const published = str(formData, "published") === "true";
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    await setPlanPublished(id, published);
+    await setPlanPublished(id, published, requestId);
     revalidatePath("/admin/plans");
     return { ok: true, message: published ? "Published." : "Unpublished." };
   } catch (error) {
@@ -352,8 +363,9 @@ export async function attachCatalogueEntryAction(
 ): Promise<ActionResult> {
   const planId = str(formData, "planId");
   const catalogueEntryId = str(formData, "catalogueEntryId");
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    await attachPlanCatalogueEntry(planId, catalogueEntryId);
+    await attachPlanCatalogueEntry(planId, catalogueEntryId, requestId);
     revalidatePath("/admin/plans");
     return { ok: true, message: "Attached." };
   } catch (error) {
@@ -369,8 +381,9 @@ export async function detachCatalogueEntryAction(
 ): Promise<ActionResult> {
   const planId = str(formData, "planId");
   const catalogueEntryId = str(formData, "catalogueEntryId");
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    await detachPlanCatalogueEntry(planId, catalogueEntryId);
+    await detachPlanCatalogueEntry(planId, catalogueEntryId, requestId);
     revalidatePath("/admin/plans");
     return { ok: true, message: "Detached." };
   } catch (error) {
@@ -388,8 +401,9 @@ export async function grantPlanAction(
 ): Promise<ActionResult> {
   const organizationId = str(formData, "organizationId");
   const planId = str(formData, "planId");
+  const requestId = globalThis.crypto.randomUUID();
   try {
-    await adminGrantPlan({ organizationId, planId });
+    await adminGrantPlan({ organizationId, planId, requestId });
     revalidatePath("/admin/subscriptions");
     return { ok: true, message: "Plan granted." };
   } catch (error) {
@@ -420,10 +434,12 @@ export async function setSubscriptionStatusAction(
   if (!SUBSCRIPTION_STATUSES.includes(statusRaw as SubscriptionStatus)) {
     return { ok: false, message: "Choose a valid status." };
   }
+  const requestId = globalThis.crypto.randomUUID();
   try {
     const updated = await adminSetSubscriptionStatus({
       subscriptionId,
       status: statusRaw as SubscriptionStatus,
+      requestId,
     });
     revalidatePath("/admin/subscriptions");
     if (!updated) {

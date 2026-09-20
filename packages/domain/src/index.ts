@@ -364,9 +364,13 @@ export function toPublicModel(entry: CatalogueEntry): PublicModel {
 }
 
 export interface CatalogueRepository {
+  // Catalogue CRUD is platform-global; each mutation records a §10 audit event
+  // (organization_id = NULL, actor = the admin) in the same transaction. The
+  // trailing `requestId` is the safe correlation id stamped on that event.
   create(
     input: CatalogueEntryInput,
     adminUserId: UserId,
+    requestId: string,
   ): Promise<CatalogueEntry>;
   /**
    * Update ONLY human-facing metadata (display name / description / access
@@ -376,11 +380,17 @@ export interface CatalogueRepository {
     id: string,
     patch: CatalogueEntryMetadataPatch,
     adminUserId: UserId,
+    requestId: string,
   ): Promise<CatalogueEntry | undefined>;
-  publish(id: string, adminUserId: UserId): Promise<CatalogueEntry | undefined>;
+  publish(
+    id: string,
+    adminUserId: UserId,
+    requestId: string,
+  ): Promise<CatalogueEntry | undefined>;
   unpublish(
     id: string,
     adminUserId: UserId,
+    requestId: string,
   ): Promise<CatalogueEntry | undefined>;
   listAll(): Promise<readonly CatalogueEntry[]>;
   listPublished(): Promise<readonly PublicModel[]>;
@@ -842,29 +852,39 @@ export interface PlanPatch {
 }
 
 export interface PlanRepository {
-  create(input: PlanInput, adminUserId: UserId): Promise<Plan>;
+  // Plan CRUD is platform-global; each mutation records a §10 audit event
+  // (organization_id = NULL, actor = the admin) in the same transaction. The
+  // trailing `requestId` is the safe correlation id stamped on that event.
+  create(input: PlanInput, adminUserId: UserId, requestId: string): Promise<Plan>;
   update(
     id: string,
     patch: PlanPatch,
     adminUserId: UserId,
+    requestId: string,
   ): Promise<Plan | undefined>;
   setEnabled(
     id: string,
     enabled: boolean,
     adminUserId: UserId,
+    requestId: string,
   ): Promise<Plan | undefined>;
   setPublished(
     id: string,
     published: boolean,
     adminUserId: UserId,
+    requestId: string,
   ): Promise<Plan | undefined>;
   attachCatalogueEntry(
     planId: string,
     catalogueEntryId: string,
+    adminUserId: UserId,
+    requestId: string,
   ): Promise<Plan | undefined>;
   detachCatalogueEntry(
     planId: string,
     catalogueEntryId: string,
+    adminUserId: UserId,
+    requestId: string,
   ): Promise<Plan | undefined>;
   listAll(): Promise<readonly Plan[]>;
   listSelfServicePublished(): Promise<readonly Plan[]>;
@@ -887,7 +907,17 @@ export interface SubscriptionRepository {
   grantFromPlan(
     organizationId: OrganizationId,
     planId: string,
-    actorUserId: UserId,
+    /**
+     * The responsible actor + safe correlation id, plus whether this is an admin
+     * cross-org grant (`viaAdmin: true` → platform-global audit naming the
+     * grantee org in after_summary) or a self-service claim by the org's own
+     * owner-member (`viaAdmin: false` → org-scoped audit).
+     */
+    grant: {
+      readonly actorUserId: UserId;
+      readonly requestId: string;
+      readonly viaAdmin: boolean;
+    },
   ): Promise<Subscription>;
   /**
    * Atomically reserve `amount` of request quota for the offering identified by
@@ -915,6 +945,12 @@ export interface SubscriptionRepository {
   setStatus(
     id: string,
     status: SubscriptionStatus,
+    /**
+     * Admin-only cross-org transition; records a platform-global §10 audit event
+     * (organization_id = NULL, actor = the admin) naming the affected org in
+     * after_summary, in the same transaction as the status UPDATE.
+     */
+    actor: { readonly actorUserId: UserId; readonly requestId: string },
   ): Promise<Subscription | undefined>;
 }
 

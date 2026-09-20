@@ -10,7 +10,8 @@ import {
   type CatalogueRepository,
   type PublicModel,
 } from "@sculpin/domain";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
+import { insertAuditEvent } from "./audit.js";
 
 interface CatalogueRow {
   id: string;
@@ -57,10 +58,16 @@ export class PostgresCatalogueRepository implements CatalogueRepository {
   async create(
     input: CatalogueEntryInput,
     adminUserId: string,
+    requestId: string,
   ): Promise<CatalogueEntry> {
     validateCatalogueEntryInput(input);
+    // Catalogue CRUD is PLATFORM-GLOBAL (no tenant org): organization_id = NULL,
+    // actor = the responsible admin. The audit summary NEVER carries the
+    // upstream_agent_id — only client-safe metadata.
+    const client: PoolClient = await this.pool.connect();
     try {
-      const result = await this.pool.query<CatalogueRow>(
+      await client.query("BEGIN");
+      const result = await client.query<CatalogueRow>(
         `INSERT INTO catalogue_entries (public_alias, upstream_agent_id, display_name, description, access_instructions, created_by_user_id, updated_by_user_id)
          VALUES ($1,$2,$3,$4,$5,$6,$6)
          RETURNING ${SELECT_COLUMNS}`,
@@ -75,9 +82,31 @@ export class PostgresCatalogueRepository implements CatalogueRepository {
       );
       const row = result.rows[0];
       if (!row) throw new Error("catalogue_insert_failed");
-      return mapRow(row);
+      const entry = mapRow(row);
+      await insertAuditEvent(client, {
+        organizationId: null,
+        actor: { actorUserId: adminUserId },
+        action: "catalogue_entry.created",
+        targetType: "catalogue_entry",
+        targetId: entry.id,
+        afterSummary: {
+          publicAlias: entry.publicAlias,
+          displayName: entry.displayName,
+          status: entry.status,
+        },
+        requestId,
+      });
+      await client.query("COMMIT");
+      return entry;
     } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore — the transaction was already resolved.
+      }
       mapCatalogueConflict(error);
+    } finally {
+      client.release();
     }
   }
 
@@ -85,6 +114,7 @@ export class PostgresCatalogueRepository implements CatalogueRepository {
     id: string,
     patch: CatalogueEntryMetadataPatch,
     adminUserId: string,
+    requestId: string,
   ): Promise<CatalogueEntry | undefined> {
     // Fail closed on any malformed field before touching the DB. This method
     // NEVER updates public_alias or upstream_agent_id — the alias↔agent mapping
@@ -92,9 +122,13 @@ export class PostgresCatalogueRepository implements CatalogueRepository {
     validateCatalogueEntryMetadataPatch(patch);
     const sets: string[] = [];
     const values: unknown[] = [id];
+    // The sorted list of changed column names is recorded in the audit summary
+    // (never the new values, which could carry admin-authored prose).
+    const changed: string[] = [];
     const push = (column: string, value: unknown): void => {
       values.push(value);
       sets.push(`${column} = $${values.length}`);
+      changed.push(column);
     };
     if (patch.displayName !== undefined) push("display_name", patch.displayName);
     if (patch.description !== undefined) push("description", patch.description);
@@ -103,42 +137,108 @@ export class PostgresCatalogueRepository implements CatalogueRepository {
     values.push(adminUserId);
     const actorParam = `$${values.length}`;
     if (sets.length === 0) sets.push("updated_at = now()");
-    const result = await this.pool.query<CatalogueRow>(
-      `UPDATE catalogue_entries
-       SET ${sets.join(", ")}, updated_by_user_id = ${actorParam}, updated_at = now(), version = version + 1
-       WHERE id = $1
-       RETURNING ${SELECT_COLUMNS}`,
-      values,
-    );
-    const row = result.rows[0];
-    return row ? mapRow(row) : undefined;
+    const client: PoolClient = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<CatalogueRow>(
+        `UPDATE catalogue_entries
+         SET ${sets.join(", ")}, updated_by_user_id = ${actorParam}, updated_at = now(), version = version + 1
+         WHERE id = $1
+         RETURNING ${SELECT_COLUMNS}`,
+        values,
+      );
+      const row = result.rows[0];
+      if (!row) {
+        // Unknown id / no row updated: write nothing.
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const entry = mapRow(row);
+      await insertAuditEvent(client, {
+        organizationId: null,
+        actor: { actorUserId: adminUserId },
+        action: "catalogue_entry.metadata_updated",
+        targetType: "catalogue_entry",
+        targetId: entry.id,
+        afterSummary: { fields: [...changed].sort(), version: entry.version },
+        requestId,
+      });
+      await client.query("COMMIT");
+      return entry;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore — the transaction was already resolved.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private async setStatus(
     id: string,
     status: CatalogueEntryStatus,
     adminUserId: string,
+    requestId: string,
   ): Promise<CatalogueEntry | undefined> {
-    const result = await this.pool.query<CatalogueRow>(
-      `UPDATE catalogue_entries
-       SET status=$2, updated_by_user_id=$3, updated_at=now(), version=version+1
-       WHERE id=$1
-       RETURNING ${SELECT_COLUMNS}`,
-      [id, status, adminUserId],
-    );
-    const row = result.rows[0];
-    return row ? mapRow(row) : undefined;
+    const client: PoolClient = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<CatalogueRow>(
+        `UPDATE catalogue_entries
+         SET status=$2, updated_by_user_id=$3, updated_at=now(), version=version+1
+         WHERE id=$1
+         RETURNING ${SELECT_COLUMNS}`,
+        [id, status, adminUserId],
+      );
+      const row = result.rows[0];
+      if (!row) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const entry = mapRow(row);
+      await insertAuditEvent(client, {
+        organizationId: null,
+        actor: { actorUserId: adminUserId },
+        action:
+          status === "published"
+            ? "catalogue_entry.published"
+            : "catalogue_entry.unpublished",
+        targetType: "catalogue_entry",
+        targetId: entry.id,
+        afterSummary: { status: entry.status },
+        requestId,
+      });
+      await client.query("COMMIT");
+      return entry;
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // ignore — the transaction was already resolved.
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
-  publish(id: string, adminUserId: string): Promise<CatalogueEntry | undefined> {
-    return this.setStatus(id, "published", adminUserId);
+  publish(
+    id: string,
+    adminUserId: string,
+    requestId: string,
+  ): Promise<CatalogueEntry | undefined> {
+    return this.setStatus(id, "published", adminUserId, requestId);
   }
 
   unpublish(
     id: string,
     adminUserId: string,
+    requestId: string,
   ): Promise<CatalogueEntry | undefined> {
-    return this.setStatus(id, "disabled", adminUserId);
+    return this.setStatus(id, "disabled", adminUserId, requestId);
   }
 
   async listAll(): Promise<readonly CatalogueEntry[]> {

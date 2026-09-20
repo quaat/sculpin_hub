@@ -100,6 +100,8 @@ export interface CreatePatInput {
    * validated atomically in the mint transaction.
    */
   readonly scopeCatalogueEntryIds?: readonly string[];
+  /** Safe correlation id stamped on the §10 `pat.minted` audit event. */
+  readonly requestId: string;
 }
 
 /**
@@ -120,6 +122,7 @@ export async function createPersonalAccessToken(
     userId: ctx.user.id,
     organizationId,
     name: input.name,
+    requestId: input.requestId,
     ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
     ...(input.scopeCatalogueEntryIds !== undefined
       ? { scopeCatalogueEntryIds: input.scopeCatalogueEntryIds }
@@ -134,12 +137,13 @@ export async function createPersonalAccessToken(
  */
 export async function revokePersonalAccessToken(
   id: string,
+  requestId: string,
   deps?: PatDeps,
 ): Promise<PatRecord | undefined> {
   const ctx = await requireUser(deps?.authz);
   if (!uuidPattern.test(id)) throw new PatInputError();
   const service = await resolveService(deps?.service);
-  return service.revoke(id, ctx.user.id);
+  return service.revoke(id, ctx.user.id, requestId);
 }
 
 /** List the caller's own PATs (metadata only; never a secret or digest). */

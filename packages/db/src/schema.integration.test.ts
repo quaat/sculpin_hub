@@ -88,6 +88,52 @@ suite("schema invariants", () => {
     );
   });
 
+  it("permits a platform-global (NULL-org) user-attributed audit row, rejects an orgless system actor, and keeps it append-only", async () => {
+    // §10: catalogue/plan CRUD and admin cross-org subscription actions have no
+    // tenant org. A NULL organization_id is permitted ONLY for a user-attributed
+    // event (a responsible admin); the affected org, if any, lives in after_summary.
+    const admin = uuid(105);
+    const target = uuid(205);
+    await client.query(
+      "INSERT INTO users (id, normalized_email, display_name, locale) VALUES ($1,'schema-global-admin@example.com','Global Admin','en')",
+      [admin],
+    );
+    // A NULL-org, user-attributed global event is accepted; the composite
+    // membership FK is skipped under MATCH SIMPLE, while actor_user_id -> users
+    // still validates the responsible admin.
+    await client.query(
+      "INSERT INTO audit_events (organization_id, actor_user_id, action, target_type, target_id, before_summary, after_summary, request_id, occurred_at) VALUES (NULL,$1,'schema.global','catalogue_entry',$2,NULL,$3::jsonb,'schema-global',now())",
+      [admin, target, JSON.stringify({ publicAlias: "sculpin-global" })],
+    );
+    // A NULL-org + system_actor event is rejected: every global event must name a
+    // responsible human, never an orgless system actor.
+    await expectPgError(
+      () =>
+        client.query(
+          "INSERT INTO audit_events (organization_id, system_actor, action, target_type, target_id, request_id, occurred_at) VALUES (NULL,'system','schema.global_system','catalogue_entry',$1,'schema-global-sys',now())",
+          [target],
+        ),
+      { code: "23514", constraint: "audit_events_global_requires_user_actor" },
+    );
+    // Append-only enforcement still holds for a NULL-org global row.
+    await expectPgError(
+      () =>
+        client.query(
+          "UPDATE audit_events SET request_id='changed' WHERE actor_user_id=$1 AND organization_id IS NULL",
+          [admin],
+        ),
+      { code: "P0001", message: /append-only/ },
+    );
+    await expectPgError(
+      () =>
+        client.query(
+          "DELETE FROM audit_events WHERE actor_user_id=$1 AND organization_id IS NULL",
+          [admin],
+        ),
+      { code: "P0001", message: /append-only/ },
+    );
+  });
+
   it("enforces metadata and personal-owner invariants", async () => {
     const user = uuid(103);
     await client.query(
