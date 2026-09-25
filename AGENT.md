@@ -38,6 +38,17 @@ Order: M0 discovery → M1 scaffold → M2 identity/OAuth → M3 catalogue → M
 M9 verification. M6 proxy architecture must NOT be frozen before M0 (`SCULPIN_INTEGRATION.md`)
 is complete.
 
+## Autonomous feature development (Claude + Codex)
+
+Bounded-autonomy feature work runs under the `autonomous-development` plugin. See
+`docs/AUTONOMOUS_DEVELOPMENT.md` for the binding policy. The loop is implementation →
+verification → independent Codex review → triage/fixes → re-verify → re-review → quality-gate
+acceptance. `controller.py doctor` is the prerequisite gate (never bypass); `controller.py
+evaluate` is the sole completion authority (never weaken checks to force a pass). Codex is
+read-only; no autonomous push/merge/deploy; prefer worktrees; don't commit unless asked.
+Prefer `/autonomous-development:autonomous-feature`. Report **COMPLETE** (only on a genuine
+`evaluate` success) or **BLOCKED**.
+
 ## Guardrails every agent inherits
 
 The security rules in `CLAUDE.md` ("Non-negotiable security rules") apply to all agents. The

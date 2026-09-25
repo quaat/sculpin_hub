@@ -82,6 +82,7 @@ LinkedIn/Stripe, which v1 does not use; where it conflicts, the sources below wi
 - Authoritative milestones: `docs/IMPLEMENTATION_PLAN.md`. Current state: `docs/STATUS.md`.
 - Decisions: `docs/DECISIONS.md` + `docs/adr/`. Threats: `docs/THREAT_MODEL.md`.
 - Upstream contract: `docs/SCULPIN_INTEGRATION.md`. Orchestration: `AGENT.md`.
+- Autonomous workflow policy: `docs/AUTONOMOUS_DEVELOPMENT.md`.
 - Historical design (superseded): `docs/sculpin-knowledge-hub-implementation-plan.md`.
 
 ## Working style in this repo
@@ -89,3 +90,18 @@ LinkedIn/Stripe, which v1 does not use; where it conflicts, the sources below wi
 Small, reviewable milestones (see `docs/IMPLEMENTATION_PLAN.md`). Do not implement the whole
 system in one pass. Verify before declaring a milestone complete. Keep the deterministic test
 suite free of live external calls (Google, GitHub, Sculpin, Azure). Prefer test doubles.
+
+## Autonomous feature development (Claude + Codex)
+
+Feature work may run under the `autonomous-development` plugin (installed at user scope, not
+vendored here). Full policy: `docs/AUTONOMOUS_DEVELOPMENT.md`. Binding essentials:
+
+- The prerequisite gate `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/controller.py" doctor` MUST
+  pass and MUST NOT be silently bypassed (needs Python ≥ 3.11 + authenticated Codex CLI).
+- `controller.py evaluate` is the **sole, non-negotiable** completion authority. Record checks
+  via `controller.py run-check --name <name> -- <cmd>`; get independent review via
+  `controller.py codex --phase review` (and `--phase adversarial` for security slices).
+- Never weaken tests/lint/types/security/review to force a pass. Codex is read-only; no
+  autonomous push/merge/deploy; prefer worktrees; don't commit unless explicitly asked.
+- Prefer `/autonomous-development:autonomous-feature`. Report exactly **COMPLETE** (only if
+  `evaluate` succeeded) or **BLOCKED** (with specifics).
